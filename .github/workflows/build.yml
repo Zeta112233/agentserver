@@ -62,8 +62,8 @@ jobs:
           cd opencode
           bun install --frozen-lockfile
           bun run --cwd packages/opencode build --single --skip-install
-          cp packages/opencode/dist/opencode-linux-x64/bin/opencode ../opencode
-          chmod +x ../opencode
+          cp packages/opencode/dist/opencode-linux-x64/bin/opencode ../opencode-bin
+          chmod +x ../opencode-bin
 
       - uses: docker/setup-buildx-action@v3
 
