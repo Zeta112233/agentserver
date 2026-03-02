@@ -149,6 +149,9 @@ func (s *Server) Router() http.Handler {
 	// Anthropic API proxy for sandboxes (auth via proxy token in x-api-key header).
 	r.HandleFunc("/proxy/anthropic/*", s.handleAnthropicProxy)
 
+	// Internal API for LLM proxy token validation (no cookie auth).
+	r.Post("/internal/validate-proxy-token", s.handleValidateProxyToken)
+
 	// Agent tunnel endpoint (auth via tunnel token, no cookie auth needed).
 	r.HandleFunc("/api/tunnel/{sandboxId}", s.handleTunnel)
 
@@ -193,6 +196,7 @@ func (s *Server) Router() http.Handler {
 		// Workspace routes
 		r.Get("/api/workspaces", s.handleListWorkspaces)
 		r.Post("/api/workspaces", s.handleCreateWorkspace)
+		r.Get("/api/workspaces/quota", s.handleGetWorkspacesQuota)
 		r.Get("/api/workspaces/{id}", s.handleGetWorkspace)
 		r.Delete("/api/workspaces/{id}", s.handleDeleteWorkspace)
 
@@ -388,6 +392,8 @@ type sandboxResponse struct {
 	PausedAt        *string `json:"pausedAt"`
 	IsLocal         bool    `json:"isLocal"`
 	LastHeartbeatAt *string `json:"lastHeartbeatAt,omitempty"`
+	CPU             int     `json:"cpu,omitempty"`
+	Memory          int64   `json:"memory,omitempty"`
 }
 
 func (s *Server) toWorkspaceResponse(ws *db.Workspace) workspaceResponse {
@@ -409,6 +415,8 @@ func (s *Server) toSandboxResponse(sbx *sbxstore.Sandbox, authToken string) sand
 		Status:      sbx.Status,
 		CreatedAt:   sbx.CreatedAt.Format(time.RFC3339),
 		IsLocal:     sbx.IsLocal,
+		CPU:         sbx.CPU,
+		Memory:      sbx.Memory,
 	}
 	if s.BaseDomain != "" {
 		subID := sbx.ShortID
@@ -477,6 +485,24 @@ func (s *Server) requireWorkspaceRole(w http.ResponseWriter, r *http.Request, wo
 }
 
 // --- Workspace handlers ---
+
+func (s *Server) handleGetWorkspacesQuota(w http.ResponseWriter, r *http.Request) {
+	userID := auth.UserIDFromContext(r.Context())
+	maxWs, err := s.effectiveQuota(userID)
+	if err != nil {
+		log.Printf("failed to get effective quota: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	current, err := s.DB.CountWorkspacesOwnedByUser(userID)
+	if err != nil {
+		log.Printf("failed to count workspaces: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]int{"current": current, "max": maxWs})
+}
 
 func (s *Server) handleListWorkspaces(w http.ResponseWriter, r *http.Request) {
 	userID := auth.UserIDFromContext(r.Context())
@@ -771,11 +797,20 @@ func (s *Server) handleGetWorkspaceDefaults(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	currentSandboxes, err := s.DB.CountSandboxesByWorkspace(wsID)
+	if err != nil {
+		log.Printf("failed to count sandboxes: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"maxSandboxCpu":    wd.MaxSandboxCPU,
 		"maxSandboxMemory": wd.MaxSandboxMemory,
 		"maxIdleTimeout":   wd.MaxIdleTimeout,
+		"maxSandboxes":     wd.MaxSandboxes,
+		"currentSandboxes": currentSandboxes,
 	})
 }
 

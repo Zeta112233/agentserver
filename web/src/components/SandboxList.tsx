@@ -13,6 +13,8 @@ import {
   listMembers,
   createAgentCode,
   logout,
+  getWorkspacesQuota,
+  getWorkspaceDefaults,
 } from '../lib/api'
 import type { UserInfo } from '../App'
 import { CreateSandboxModal } from './CreateSandboxModal'
@@ -94,7 +96,13 @@ export function SandboxList({
   const [confirmPause, setConfirmPause] = useState<{ id: string; name: string } | null>(null)
   const [confirmDeleteWs, setConfirmDeleteWs] = useState<{ id: string; name: string } | null>(null)
   const [showCreateWs, setShowCreateWs] = useState(false)
-  const [wsDetail, setWsDetail] = useState<{ name: string; members: WorkspaceMember[]; createdAt: string } | null>(null)
+  const [wsDetail, setWsDetail] = useState<{
+    name: string
+    members: WorkspaceMember[]
+    createdAt: string
+    workspaceQuota?: { current: number; max: number }
+    sandboxQuota?: { current: number; max: number }
+  } | null>(null)
   const [agentCodeData, setAgentCodeData] = useState<{ code: string; expiresAt: string; command: string } | null>(null)
   const [quotaError, setQuotaError] = useState<string | null>(null)
   const [theme, setThemeState] = useState<'system' | 'light' | 'dark'>(() => {
@@ -171,7 +179,7 @@ export function SandboxList({
       onSelectSandbox(sbx.id)
     } catch (err: unknown) {
       const qe = err as { error?: string; message?: string } | undefined
-      if (qe?.error === 'quota_exceeded' && qe.message) {
+      if ((qe?.error === 'quota_exceeded' || qe?.error === 'resource_budget_exceeded') && qe.message) {
         setQuotaError(qe.message)
       }
     } finally {
@@ -242,7 +250,7 @@ export function SandboxList({
       onSelectWorkspace(ws.id)
     } catch (err: unknown) {
       const qe = err as { error?: string; message?: string } | undefined
-      if (qe?.error === 'quota_exceeded' && qe.message) {
+      if ((qe?.error === 'quota_exceeded' || qe?.error === 'resource_budget_exceeded') && qe.message) {
         setQuotaError(qe.message)
       }
     }
@@ -278,7 +286,20 @@ export function SandboxList({
     } catch {
       // ignore
     }
-    setWsDetail({ name: ws.name, members, createdAt: ws.createdAt })
+    let workspaceQuota: { current: number; max: number } | undefined
+    let sandboxQuota: { current: number; max: number } | undefined
+    try {
+      workspaceQuota = await getWorkspacesQuota()
+    } catch {
+      // ignore
+    }
+    try {
+      const defaults = await getWorkspaceDefaults(selectedWorkspaceId)
+      sandboxQuota = { current: defaults.currentSandboxes, max: defaults.maxSandboxes }
+    } catch {
+      // ignore
+    }
+    setWsDetail({ name: ws.name, members, createdAt: ws.createdAt, workspaceQuota, sandboxQuota })
   }
 
   const handleLogout = async () => {
@@ -606,6 +627,22 @@ export function SandboxList({
                 <span className="text-[var(--muted-foreground)]">Created</span>
                 <span className="text-[var(--foreground)] font-medium">{new Date(wsDetail.createdAt).toLocaleString()}</span>
               </div>
+              {wsDetail.workspaceQuota && (
+                <div className="flex justify-between">
+                  <span className="text-[var(--muted-foreground)]">Workspaces</span>
+                  <span className="text-[var(--foreground)] font-medium">
+                    {wsDetail.workspaceQuota.current} / {wsDetail.workspaceQuota.max === 0 ? '\u221E' : wsDetail.workspaceQuota.max}
+                  </span>
+                </div>
+              )}
+              {wsDetail.sandboxQuota && (
+                <div className="flex justify-between">
+                  <span className="text-[var(--muted-foreground)]">Sandboxes</span>
+                  <span className="text-[var(--foreground)] font-medium">
+                    {wsDetail.sandboxQuota.current} / {wsDetail.sandboxQuota.max === 0 ? '\u221E' : wsDetail.sandboxQuota.max}
+                  </span>
+                </div>
+              )}
             </div>
             <div className="flex justify-end mt-5">
               <button

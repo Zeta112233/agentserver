@@ -27,6 +27,8 @@ export interface Sandbox {
   pausedAt: string | null
   isLocal: boolean
   lastHeartbeatAt?: string | null
+  cpu?: number
+  memory?: number
 }
 
 export async function login(username: string, password: string): Promise<boolean> {
@@ -74,11 +76,12 @@ export async function logout(): Promise<void> {
 
 // Workspace API
 
-async function checkQuotaError(res: Response): Promise<QuotaExceededError | null> {
+async function checkQuotaError(res: Response): Promise<QuotaExceededError | ResourceBudgetExceededError | null> {
   if (res.status !== 403) return null
   try {
     const body = await res.json()
     if (body.error === 'quota_exceeded') return body as QuotaExceededError
+    if (body.error === 'resource_budget_exceeded') return body as ResourceBudgetExceededError
   } catch {
     // not a quota error
   }
@@ -114,6 +117,12 @@ export async function getWorkspace(id: string): Promise<Workspace> {
 export async function deleteWorkspace(id: string): Promise<void> {
   const res = await fetch(`/api/workspaces/${id}`, { method: 'DELETE' })
   if (!res.ok) throw new Error('Failed to delete workspace')
+}
+
+export async function getWorkspacesQuota(): Promise<WorkspacesQuota> {
+  const res = await fetch('/api/workspaces/quota')
+  if (!res.ok) throw new Error('Failed to get workspaces quota')
+  return res.json()
 }
 
 // Workspace member API
@@ -154,6 +163,8 @@ export interface WorkspaceSandboxDefaults {
   maxSandboxCpu: number    // millicores
   maxSandboxMemory: number // bytes
   maxIdleTimeout: number   // seconds
+  maxSandboxes: number     // 0 = unlimited
+  currentSandboxes: number
 }
 
 export async function getWorkspaceDefaults(workspaceId: string): Promise<WorkspaceSandboxDefaults> {
@@ -338,6 +349,16 @@ export interface QuotaExceededError {
   error: 'quota_exceeded'
   message: string
   quota: { current: number; max: number }
+}
+
+export interface ResourceBudgetExceededError {
+  error: 'resource_budget_exceeded'
+  message: string
+}
+
+export interface WorkspacesQuota {
+  current: number
+  max: number
 }
 
 // Admin quota API

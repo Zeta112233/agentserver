@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Loader2, ExternalLink, Clock, Activity } from 'lucide-react'
+import { Loader2, ExternalLink, Clock, Activity, Cpu, MemoryStick } from 'lucide-react'
 import { checkAuth, listWorkspaces, listSandboxes, getMe, type Workspace, type Sandbox } from './lib/api'
 import { Login } from './components/Login'
 import { SandboxList } from './components/SandboxList'
@@ -159,6 +159,18 @@ export default function App() {
                 <span>Last active: {new Date(activeSandboxData.lastActivityAt).toLocaleString()}</span>
               </div>
             )}
+            {!activeSandboxData.isLocal && activeSandboxData.cpu ? (
+              <div className="flex items-center gap-2 text-[var(--muted-foreground)]">
+                <Cpu size={14} />
+                <span>CPU: {(activeSandboxData.cpu / 1000).toFixed(1)} cores</span>
+              </div>
+            ) : null}
+            {!activeSandboxData.isLocal && activeSandboxData.memory ? (
+              <div className="flex items-center gap-2 text-[var(--muted-foreground)]">
+                <MemoryStick size={14} />
+                <span>Memory: {Math.round(activeSandboxData.memory / (1024 * 1024))} MB</span>
+              </div>
+            ) : null}
           </div>
         </div>
         {isRunning && sandboxUrl ? (
