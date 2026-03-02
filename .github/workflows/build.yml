@@ -52,13 +52,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
 
-      - name: Download opencode binary
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Build opencode binary from submodule
         run: |
-          TAG=$(curl -fsSL https://api.github.com/repos/anomalyco/opencode/releases/latest | jq -r .tag_name)
-          curl -fsSL -o opencode.tar.gz "https://github.com/anomalyco/opencode/releases/download/${TAG}/opencode-linux-x64.tar.gz"
-          tar xzf opencode.tar.gz
-          chmod +x opencode
+          cd opencode
+          bun install --frozen-lockfile
+          bun run --cwd packages/opencode build --single --skip-install
+          cp packages/opencode/dist/opencode-linux-x64/bin/opencode ../opencode
+          chmod +x ../opencode
 
       - uses: docker/setup-buildx-action@v3
 
