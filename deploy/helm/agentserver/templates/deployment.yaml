@@ -138,6 +138,8 @@ spec:
               value: {{ .Values.sandbox.opencode.subdomainPrefix | default "code" | quote }}
             - name: OPENCLAW_SUBDOMAIN_PREFIX
               value: {{ .Values.sandbox.openclaw.subdomainPrefix | default "claw" | quote }}
+            - name: LLMPROXY_URL
+              value: {{ printf "http://%s-llmproxy.%s.svc:%v" .Release.Name .Release.Namespace (int .Values.llmproxy.port) | quote }}
             {{- if and .Values.platform.domain (or .Values.platform.auth.oidc.github.enabled .Values.platform.auth.oidc.generic.enabled) }}
             - name: OIDC_REDIRECT_BASE_URL
               value: {{ printf "https://%s" .Values.platform.domain | quote }}

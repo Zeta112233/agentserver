@@ -63,4 +63,5 @@ type QueryOpts struct {
 	SandboxID   string
 	Since       time.Time
 	Limit       int
+	Offset      int
 }

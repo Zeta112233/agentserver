@@ -211,6 +211,7 @@ var serveCmd = &cobra.Command{
 		}
 
 		srv := server.New(authSvc, oidcMgr, database, sandboxStore, procMgr, driveMgr, nsMgr, tunnel.NewRegistry(), staticFS, opencodeStaticFS, !strings.EqualFold(os.Getenv("PASSWORD_AUTH_ENABLED"), "false"))
+		srv.LLMProxyURL = os.Getenv("LLMPROXY_URL")
 		addr := fmt.Sprintf(":%d", port)
 
 		// Start idle watcher with a dynamic timeout getter that reads from the settings chain.

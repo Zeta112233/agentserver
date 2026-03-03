@@ -29,6 +29,7 @@ export interface Sandbox {
   lastHeartbeatAt?: string | null
   cpu?: number
   memory?: number
+  idleTimeout?: number
 }
 
 export async function login(username: string, password: string): Promise<boolean> {
@@ -226,6 +227,51 @@ export async function pauseSandbox(id: string): Promise<void> {
 export async function resumeSandbox(id: string): Promise<void> {
   const res = await fetch(`/api/sandboxes/${id}/resume`, { method: 'POST' })
   if (!res.ok) throw new Error('Failed to resume sandbox')
+}
+
+// Usage & Traces API
+
+export interface UsageSummary {
+  provider: string
+  model: string
+  inputTokens: number
+  outputTokens: number
+  cacheCreationInputTokens: number
+  cacheReadInputTokens: number
+  requestCount: number
+}
+
+export interface TraceItem {
+  id: string
+  sandboxId: string
+  workspaceId: string
+  source: string
+  createdAt: string
+  updatedAt: string
+  requestCount: number
+  totalInputTokens: number
+  totalOutputTokens: number
+}
+
+export interface UsageResponse {
+  usage: UsageSummary[]
+}
+
+export interface TracesResponse {
+  traces: TraceItem[]
+  total: number
+}
+
+export async function getSandboxUsage(id: string): Promise<UsageResponse> {
+  const res = await fetch(`/api/sandboxes/${id}/usage`)
+  if (!res.ok) throw new Error('Failed to get sandbox usage')
+  return res.json()
+}
+
+export async function getSandboxTraces(id: string, limit: number, offset: number): Promise<TracesResponse> {
+  const res = await fetch(`/api/sandboxes/${id}/traces?limit=${limit}&offset=${offset}`)
+  if (!res.ok) throw new Error('Failed to get sandbox traces')
+  return res.json()
 }
 
 // Agent registration code API

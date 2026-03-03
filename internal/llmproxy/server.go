@@ -93,7 +93,7 @@ func (s *Server) handleQueryUsage(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleQueryTraces(w http.ResponseWriter, r *http.Request) {
 	opts := parseQueryOpts(r)
 
-	traces, err := s.store.QueryTraces(opts)
+	traces, total, err := s.store.QueryTraces(opts)
 	if err != nil {
 		s.logger.Error("query traces failed", "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -103,6 +103,7 @@ func (s *Server) handleQueryTraces(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"traces": traces,
+		"total":  total,
 	})
 }
 
@@ -141,6 +142,11 @@ func parseQueryOpts(r *http.Request) QueryOpts {
 	if limit := r.URL.Query().Get("limit"); limit != "" {
 		if n, err := strconv.Atoi(limit); err == nil && n > 0 {
 			opts.Limit = n
+		}
+	}
+	if offset := r.URL.Query().Get("offset"); offset != "" {
+		if n, err := strconv.Atoi(offset); err == nil && n >= 0 {
+			opts.Offset = n
 		}
 	}
 	return opts

@@ -106,8 +106,8 @@ func (s *Store) QueryUsage(opts QueryOpts) ([]UsageSummary, error) {
 	return results, rows.Err()
 }
 
-// QueryTraces returns traces with aggregated statistics.
-func (s *Store) QueryTraces(opts QueryOpts) ([]TraceWithStats, error) {
+// QueryTraces returns traces with aggregated statistics and total count.
+func (s *Store) QueryTraces(opts QueryOpts) ([]TraceWithStats, int64, error) {
 	var conditions []string
 	var args []interface{}
 	argN := 1
@@ -133,9 +133,21 @@ func (s *Store) QueryTraces(opts QueryOpts) ([]TraceWithStats, error) {
 		where = "WHERE " + strings.Join(conditions, " AND ")
 	}
 
+	// Count total matching traces.
+	var total int64
+	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM traces t %s`, where)
+	if err := s.db.QueryRow(countQuery, args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count traces: %w", err)
+	}
+
 	limit := 100
 	if opts.Limit > 0 && opts.Limit < 1000 {
 		limit = opts.Limit
+	}
+
+	offset := 0
+	if opts.Offset > 0 {
+		offset = opts.Offset
 	}
 
 	query := fmt.Sprintf(`
@@ -148,11 +160,11 @@ func (s *Store) QueryTraces(opts QueryOpts) ([]TraceWithStats, error) {
 		%s
 		GROUP BY t.id
 		ORDER BY t.updated_at DESC
-		LIMIT %d`, where, limit)
+		LIMIT %d OFFSET %d`, where, limit, offset)
 
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("query traces: %w", err)
+		return nil, 0, fmt.Errorf("query traces: %w", err)
 	}
 	defer rows.Close()
 
@@ -162,11 +174,11 @@ func (s *Store) QueryTraces(opts QueryOpts) ([]TraceWithStats, error) {
 		if err := rows.Scan(&ts.ID, &ts.SandboxID, &ts.WorkspaceID, &ts.Source,
 			&ts.CreatedAt, &ts.UpdatedAt, &ts.RequestCount,
 			&ts.TotalInputTokens, &ts.TotalOutputTokens); err != nil {
-			return nil, fmt.Errorf("scan trace: %w", err)
+			return nil, 0, fmt.Errorf("scan trace: %w", err)
 		}
 		results = append(results, ts)
 	}
-	return results, rows.Err()
+	return results, total, rows.Err()
 }
 
 // GetTraceDetail returns a trace and all its usage records.

@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"net/http"
@@ -42,6 +43,7 @@ type Server struct {
 	OpencodeSubdomainPrefix  string // e.g. "code" — subdomain: code-{id}.{baseDomain}
 	OpenclawSubdomainPrefix  string // e.g. "claw" — subdomain: claw-{id}.{baseDomain}
 	PasswordAuthEnabled      bool   // when false, /api/auth/login and /api/auth/register are not registered
+	LLMProxyURL              string // base URL for the llmproxy service (e.g. "http://agentserver-llmproxy:8081")
 	// activityThrottle prevents excessive DB writes for activity tracking.
 	activityMu   sync.Mutex
 	activityLast map[string]time.Time
@@ -211,6 +213,8 @@ func (s *Server) Router() http.Handler {
 		r.Delete("/api/sandboxes/{id}", s.handleDeleteSandbox)
 		r.Post("/api/sandboxes/{id}/pause", s.handlePauseSandbox)
 		r.Post("/api/sandboxes/{id}/resume", s.handleResumeSandbox)
+		r.Get("/api/sandboxes/{id}/usage", s.handleSandboxUsage)
+		r.Get("/api/sandboxes/{id}/traces", s.handleSandboxTraces)
 
 		// Agent registration code generation
 		r.Post("/api/workspaces/{wid}/agent-code", s.handleCreateAgentCode)
@@ -391,6 +395,7 @@ type sandboxResponse struct {
 	LastHeartbeatAt *string `json:"lastHeartbeatAt,omitempty"`
 	CPU             int     `json:"cpu,omitempty"`
 	Memory          int64   `json:"memory,omitempty"`
+	IdleTimeout     *int    `json:"idleTimeout,omitempty"`
 }
 
 func (s *Server) toWorkspaceResponse(ws *db.Workspace) workspaceResponse {
@@ -414,6 +419,7 @@ func (s *Server) toSandboxResponse(sbx *sbxstore.Sandbox, authToken string) sand
 		IsLocal:     sbx.IsLocal,
 		CPU:         sbx.CPU,
 		Memory:      sbx.Memory,
+		IdleTimeout: sbx.IdleTimeout,
 	}
 	if s.BaseDomain != "" {
 		subID := sbx.ShortID
@@ -1188,6 +1194,61 @@ func (s *Server) handleResumeSandbox(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "resuming"})
+}
+
+func (s *Server) handleSandboxUsage(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	sbx, ok := s.Sandboxes.Get(id)
+	if !ok {
+		http.Error(w, "sandbox not found", http.StatusNotFound)
+		return
+	}
+	if _, ok := s.requireWorkspaceMember(w, r, sbx.WorkspaceID); !ok {
+		return
+	}
+	if s.LLMProxyURL == "" {
+		http.Error(w, "llmproxy not configured", http.StatusServiceUnavailable)
+		return
+	}
+	proxyURL := s.LLMProxyURL + "/api/usage?sandbox_id=" + id
+	s.proxyLLMRequest(w, proxyURL)
+}
+
+func (s *Server) handleSandboxTraces(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	sbx, ok := s.Sandboxes.Get(id)
+	if !ok {
+		http.Error(w, "sandbox not found", http.StatusNotFound)
+		return
+	}
+	if _, ok := s.requireWorkspaceMember(w, r, sbx.WorkspaceID); !ok {
+		return
+	}
+	if s.LLMProxyURL == "" {
+		http.Error(w, "llmproxy not configured", http.StatusServiceUnavailable)
+		return
+	}
+	proxyURL := s.LLMProxyURL + "/api/traces?sandbox_id=" + id
+	if limit := r.URL.Query().Get("limit"); limit != "" {
+		proxyURL += "&limit=" + limit
+	}
+	if offset := r.URL.Query().Get("offset"); offset != "" {
+		proxyURL += "&offset=" + offset
+	}
+	s.proxyLLMRequest(w, proxyURL)
+}
+
+func (s *Server) proxyLLMRequest(w http.ResponseWriter, url string) {
+	resp, err := http.Get(url)
+	if err != nil {
+		log.Printf("llmproxy request failed: %v", err)
+		http.Error(w, "llmproxy unavailable", http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(resp.StatusCode)
+	io.Copy(w, resp.Body)
 }
 
 func (s *Server) handleOIDCLogin(w http.ResponseWriter, r *http.Request) {
