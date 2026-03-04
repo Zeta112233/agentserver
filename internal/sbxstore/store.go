@@ -9,25 +9,25 @@ import (
 // Sandbox represents a sandbox with its current state.
 type Sandbox struct {
 	ID              string     `json:"id"`
-	ShortID         string     `json:"shortId,omitempty"`
-	WorkspaceID     string     `json:"workspaceId"`
+	ShortID         string     `json:"short_id,omitempty"`
+	WorkspaceID     string     `json:"workspace_id"`
 	Name            string     `json:"name"`
 	Type            string     `json:"type"`
 	Status          string     `json:"status"`
-	SandboxName     string     `json:"sandboxName,omitempty"`
-	PodIP           string     `json:"podIp,omitempty"`
+	SandboxName     string     `json:"sandbox_name,omitempty"`
+	PodIP           string     `json:"pod_ip,omitempty"`
 	ProxyToken      string     `json:"-"`
 	OpencodeToken   string     `json:"-"`
 	OpenclawToken   string     `json:"-"`
 	TunnelToken     string     `json:"-"`
-	CreatedAt       time.Time  `json:"createdAt"`
-	LastActivityAt  *time.Time `json:"lastActivityAt,omitempty"`
-	PausedAt        *time.Time `json:"pausedAt,omitempty"`
-	IsLocal         bool       `json:"isLocal"`
-	LastHeartbeatAt *time.Time `json:"lastHeartbeatAt,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
+	LastActivityAt  *time.Time `json:"last_activity_at,omitempty"`
+	PausedAt        *time.Time `json:"paused_at,omitempty"`
+	IsLocal         bool       `json:"is_local"`
+	LastHeartbeatAt *time.Time `json:"last_heartbeat_at,omitempty"`
 	CPU             int        `json:"cpu,omitempty"`
 	Memory          int64      `json:"memory,omitempty"`
-	IdleTimeout     *int       `json:"idleTimeout,omitempty"`
+	IdleTimeout     *int       `json:"idle_timeout,omitempty"`
 }
 
 // Store manages sandboxes via PostgreSQL.

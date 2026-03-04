@@ -12,51 +12,51 @@ type SandboxInfo struct {
 // Trace represents a logical session/trace spanning multiple API requests.
 type Trace struct {
 	ID          string    `json:"id"`
-	SandboxID   string    `json:"sandboxId"`
-	WorkspaceID string    `json:"workspaceId"`
+	SandboxID   string    `json:"sandbox_id"`
+	WorkspaceID string    `json:"workspace_id"`
 	Source      string    `json:"source"`
-	CreatedAt   time.Time `json:"createdAt"`
-	UpdatedAt   time.Time `json:"updatedAt"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 // TokenUsage records a single LLM API request's token usage.
 type TokenUsage struct {
 	ID                       string    `json:"id"`
-	TraceID                  string    `json:"traceId,omitempty"`
-	SandboxID                string    `json:"sandboxId"`
-	WorkspaceID              string    `json:"workspaceId"`
+	TraceID                  string    `json:"trace_id,omitempty"`
+	SandboxID                string    `json:"sandbox_id"`
+	WorkspaceID              string    `json:"workspace_id"`
 	Provider                 string    `json:"provider"`
 	Model                    string    `json:"model"`
-	MessageID                string    `json:"messageId,omitempty"`
-	InputTokens              int64     `json:"inputTokens"`
-	OutputTokens             int64     `json:"outputTokens"`
-	CacheCreationInputTokens int64     `json:"cacheCreationInputTokens"`
-	CacheReadInputTokens     int64     `json:"cacheReadInputTokens"`
+	MessageID                string    `json:"message_id,omitempty"`
+	InputTokens              int64     `json:"input_tokens"`
+	OutputTokens             int64     `json:"output_tokens"`
+	CacheCreationInputTokens int64     `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int64     `json:"cache_read_input_tokens"`
 	Streaming                bool      `json:"streaming"`
 	Duration                 int64     `json:"duration"`
 	TTFT                     int64     `json:"ttft"`
-	CreatedAt                time.Time `json:"createdAt"`
+	CreatedAt                time.Time `json:"created_at"`
 }
 
 // UsageSummary is an aggregated usage row grouped by provider+model.
 type UsageSummary struct {
 	Provider                 string `json:"provider"`
 	Model                    string `json:"model"`
-	InputTokens              int64  `json:"inputTokens"`
-	OutputTokens             int64  `json:"outputTokens"`
-	CacheCreationInputTokens int64  `json:"cacheCreationInputTokens"`
-	CacheReadInputTokens     int64  `json:"cacheReadInputTokens"`
-	RequestCount             int64  `json:"requestCount"`
+	InputTokens              int64  `json:"input_tokens"`
+	OutputTokens             int64  `json:"output_tokens"`
+	CacheCreationInputTokens int64  `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int64  `json:"cache_read_input_tokens"`
+	RequestCount             int64  `json:"request_count"`
 }
 
 // TraceWithStats is a trace with aggregated request statistics.
 type TraceWithStats struct {
 	Trace
-	RequestCount             int64  `json:"requestCount"`
-	TotalInputTokens         int64  `json:"totalInputTokens"`
-	TotalOutputTokens        int64  `json:"totalOutputTokens"`
-	TotalCacheReadTokens     int64  `json:"totalCacheReadTokens"`
-	TotalCacheCreationTokens int64  `json:"totalCacheCreationTokens"`
+	RequestCount             int64  `json:"request_count"`
+	TotalInputTokens         int64  `json:"total_input_tokens"`
+	TotalOutputTokens        int64  `json:"total_output_tokens"`
+	TotalCacheReadTokens     int64  `json:"total_cache_read_tokens"`
+	TotalCacheCreationTokens int64  `json:"total_cache_creation_tokens"`
 	Models                   string `json:"models"`
 }
 

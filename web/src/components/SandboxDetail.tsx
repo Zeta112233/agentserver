@@ -107,13 +107,13 @@ export function SandboxDetail({ sandbox, onPause, onResume, onDelete }: SandboxD
   const isPaused = sandbox.status === 'paused'
   const isTransitional = sandbox.status === 'pausing' || sandbox.status === 'resuming' || sandbox.status === 'creating'
   const isOpenClaw = sandbox.type === 'openclaw'
-  const sandboxUrl = isOpenClaw ? sandbox.openclawUrl : sandbox.opencodeUrl
+  const sandboxUrl = isOpenClaw ? sandbox.openclaw_url : sandbox.opencode_url
 
-  const totalRequests = usageData ? usageData.reduce((s, u) => s + u.requestCount, 0) : 0
-  const totalInput = usageData ? usageData.reduce((s, u) => s + u.inputTokens, 0) : 0
-  const totalOutput = usageData ? usageData.reduce((s, u) => s + u.outputTokens, 0) : 0
-  const totalCacheRead = usageData ? usageData.reduce((s, u) => s + u.cacheReadInputTokens, 0) : 0
-  const totalCacheWrite = usageData ? usageData.reduce((s, u) => s + u.cacheCreationInputTokens, 0) : 0
+  const totalRequests = usageData ? usageData.reduce((s, u) => s + u.request_count, 0) : 0
+  const totalInput = usageData ? usageData.reduce((s, u) => s + u.input_tokens, 0) : 0
+  const totalOutput = usageData ? usageData.reduce((s, u) => s + u.output_tokens, 0) : 0
+  const totalCacheRead = usageData ? usageData.reduce((s, u) => s + u.cache_read_input_tokens, 0) : 0
+  const totalCacheWrite = usageData ? usageData.reduce((s, u) => s + u.cache_creation_input_tokens, 0) : 0
   const totalPages = Math.ceil(tracesTotal / TRACES_PER_PAGE)
 
   const tabs: { key: Tab; label: string; icon: React.ReactNode }[] = [
@@ -129,7 +129,7 @@ export function SandboxDetail({ sandbox, onPause, onResume, onDelete }: SandboxD
           <div className="min-w-0 flex-1">
             <h1 className="text-lg font-semibold text-[var(--foreground)] truncate">{sandbox.name}</h1>
             <div className="mt-1.5">
-              <StatusBadge status={sandbox.status} isLocal={sandbox.isLocal} />
+              <StatusBadge status={sandbox.status} isLocal={sandbox.is_local} />
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-2">
@@ -144,7 +144,7 @@ export function SandboxDetail({ sandbox, onPause, onResume, onDelete }: SandboxD
                 {isOpenClaw ? 'Open' : 'Open'}
               </a>
             )}
-            {!sandbox.isLocal && isRunning && (
+            {!sandbox.is_local && isRunning && (
               <button
                 onClick={() => setConfirmPause(true)}
                 className="inline-flex items-center gap-1.5 rounded-md border border-[var(--border)] bg-[var(--card)] px-3 py-1.5 text-xs font-medium text-[var(--foreground)] hover:bg-[var(--secondary)] transition-colors"
@@ -153,7 +153,7 @@ export function SandboxDetail({ sandbox, onPause, onResume, onDelete }: SandboxD
                 Pause
               </button>
             )}
-            {!sandbox.isLocal && isPaused && (
+            {!sandbox.is_local && isPaused && (
               <button
                 onClick={() => onResume(sandbox.id)}
                 className="inline-flex items-center gap-1.5 rounded-md border border-green-500/30 bg-green-500/10 px-3 py-1.5 text-xs font-medium text-green-400 hover:bg-green-500/20 transition-colors"
@@ -235,7 +235,7 @@ function OverviewTab({ sandbox, usageData, totals }: {
   const isOffline = sandbox.status === 'offline'
   const isRunning = sandbox.status === 'running'
   const isOpenClaw = sandbox.type === 'openclaw'
-  const sandboxUrl = isOpenClaw ? sandbox.openclawUrl : sandbox.opencodeUrl
+  const sandboxUrl = isOpenClaw ? sandbox.openclaw_url : sandbox.opencode_url
   const fallbackLabel = isOpenClaw ? 'OpenClaw' : 'OpenCode'
 
   return (
@@ -264,21 +264,21 @@ function OverviewTab({ sandbox, usageData, totals }: {
 
       {/* Info Grid */}
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
-        <InfoCard icon={<Clock size={14} />} label="Created" value={new Date(sandbox.createdAt).toLocaleString()} />
-        {sandbox.lastActivityAt && (
-          <InfoCard icon={<Activity size={14} />} label="Last active" value={new Date(sandbox.lastActivityAt).toLocaleString()} />
+        <InfoCard icon={<Clock size={14} />} label="Created" value={new Date(sandbox.created_at).toLocaleString()} />
+        {sandbox.last_activity_at && (
+          <InfoCard icon={<Activity size={14} />} label="Last active" value={new Date(sandbox.last_activity_at).toLocaleString()} />
         )}
-        {sandbox.idleTimeout != null && (
+        {sandbox.idle_timeout != null && (
           <InfoCard
             icon={<Timer size={14} />}
             label="Idle timeout"
-            value={sandbox.idleTimeout >= 60 ? `${Math.round(sandbox.idleTimeout / 60)} min` : `${sandbox.idleTimeout}s`}
+            value={sandbox.idle_timeout >= 60 ? `${Math.round(sandbox.idle_timeout / 60)} min` : `${sandbox.idle_timeout}s`}
           />
         )}
-        {!sandbox.isLocal && sandbox.cpu ? (
+        {!sandbox.is_local && sandbox.cpu ? (
           <InfoCard icon={<Cpu size={14} />} label="CPU" value={`${(sandbox.cpu / 1000).toFixed(1)} cores`} />
         ) : null}
-        {!sandbox.isLocal && sandbox.memory ? (
+        {!sandbox.is_local && sandbox.memory ? (
           <InfoCard icon={<MemoryStick size={14} />} label="Memory" value={`${Math.round(sandbox.memory / (1024 * 1024))} MB`} />
         ) : null}
       </div>
@@ -305,8 +305,8 @@ function OverviewTab({ sandbox, usageData, totals }: {
                   <div key={`${u.provider}-${u.model}`} className="flex items-center justify-between text-xs">
                     <span className="text-[var(--foreground)] font-mono truncate mr-3">{u.model}</span>
                     <div className="flex items-center gap-3 text-[var(--muted-foreground)] whitespace-nowrap">
-                      <span>{formatTokens(u.requestCount)} req</span>
-                      <span>{formatTokens(u.inputTokens + u.outputTokens)} tok</span>
+                      <span>{formatTokens(u.request_count)} req</span>
+                      <span>{formatTokens(u.input_tokens + u.output_tokens)} tok</span>
                     </div>
                   </div>
                 ))}
@@ -377,12 +377,12 @@ function TracesTab({ traces, tracesTotal, tracesPage, totalPages, onPageChange }
               <tr key={t.id} className="border-b border-[var(--border)] last:border-0 hover:bg-[var(--secondary)]/30 transition-colors">
                 <td className="py-2.5 px-4 text-[var(--foreground)] font-mono truncate max-w-[140px]">{t.source || t.id.slice(0, 8)}</td>
                 <td className="py-2.5 px-4 text-[var(--muted-foreground)] font-mono truncate max-w-[160px]" title={t.models}>{t.models || '-'}</td>
-                <td className="py-2.5 px-4 text-right text-[var(--muted-foreground)]">{t.requestCount}</td>
-                <td className="py-2.5 px-4 text-right text-[var(--muted-foreground)]">{formatTokens(t.totalInputTokens)}</td>
-                <td className="py-2.5 px-4 text-right text-[var(--muted-foreground)]">{formatTokens(t.totalOutputTokens)}</td>
-                <td className="py-2.5 px-4 text-right text-[var(--muted-foreground)]">{formatTokens(t.totalCacheReadTokens)}</td>
-                <td className="py-2.5 px-4 text-right text-[var(--muted-foreground)]">{formatTokens(t.totalCacheCreationTokens)}</td>
-                <td className="py-2.5 px-4 text-right text-[var(--muted-foreground)] whitespace-nowrap">{new Date(t.updatedAt).toLocaleString()}</td>
+                <td className="py-2.5 px-4 text-right text-[var(--muted-foreground)]">{t.request_count}</td>
+                <td className="py-2.5 px-4 text-right text-[var(--muted-foreground)]">{formatTokens(t.total_input_tokens)}</td>
+                <td className="py-2.5 px-4 text-right text-[var(--muted-foreground)]">{formatTokens(t.total_output_tokens)}</td>
+                <td className="py-2.5 px-4 text-right text-[var(--muted-foreground)]">{formatTokens(t.total_cache_read_tokens)}</td>
+                <td className="py-2.5 px-4 text-right text-[var(--muted-foreground)]">{formatTokens(t.total_cache_creation_tokens)}</td>
+                <td className="py-2.5 px-4 text-right text-[var(--muted-foreground)] whitespace-nowrap">{new Date(t.updated_at).toLocaleString()}</td>
               </tr>
             ))}
           </tbody>

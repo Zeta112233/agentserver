@@ -175,7 +175,7 @@ function UsersTable({
                   </button>
                 </td>
                 <td className="px-4 py-3 text-[var(--muted-foreground)]">
-                  {new Date(u.createdAt).toLocaleString()}
+                  {new Date(u.created_at).toLocaleString()}
                 </td>
               </tr>
             ))}
@@ -222,10 +222,10 @@ function WorkspacesTable({ workspaces }: { workspaces: AdminWorkspace[] }) {
                   </button>
                 </td>
                 <td className="px-4 py-3 text-[var(--muted-foreground)]">
-                  {new Date(ws.createdAt).toLocaleString()}
+                  {new Date(ws.created_at).toLocaleString()}
                 </td>
                 <td className="px-4 py-3 text-[var(--muted-foreground)]">
-                  {new Date(ws.updatedAt).toLocaleString()}
+                  {new Date(ws.updated_at).toLocaleString()}
                 </td>
               </tr>
             ))}
@@ -275,13 +275,13 @@ function SandboxesTable({ sandboxes }: { sandboxes: AdminSandbox[] }) {
             <tr key={sbx.id} className="border-b border-[var(--border)] last:border-b-0">
               <td className="px-4 py-3 text-[var(--foreground)]">
                 {sbx.name}
-                {sbx.isLocal && (
+                {sbx.is_local && (
                   <span className="ml-2 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-medium text-emerald-400">
                     local
                   </span>
                 )}
               </td>
-              <td className="px-4 py-3 font-mono text-xs text-[var(--muted-foreground)]">{sbx.workspaceId}</td>
+              <td className="px-4 py-3 font-mono text-xs text-[var(--muted-foreground)]">{sbx.workspace_id}</td>
               <td className="px-4 py-3 text-[var(--muted-foreground)]">{sbx.type}</td>
               <td className="px-4 py-3">
                 <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${statusColor(sbx.status)}`}>
@@ -289,10 +289,10 @@ function SandboxesTable({ sandboxes }: { sandboxes: AdminSandbox[] }) {
                 </span>
               </td>
               <td className="px-4 py-3 text-[var(--muted-foreground)]">
-                {new Date(sbx.createdAt).toLocaleString()}
+                {new Date(sbx.created_at).toLocaleString()}
               </td>
               <td className="px-4 py-3 text-[var(--muted-foreground)]">
-                {sbx.lastActivityAt ? new Date(sbx.lastActivityAt).toLocaleString() : '—'}
+                {sbx.last_activity_at ? new Date(sbx.last_activity_at).toLocaleString() : '—'}
               </td>
             </tr>
           ))}
@@ -321,15 +321,15 @@ function SettingsTab() {
   useEffect(() => {
     adminGetQuotaDefaults().then((d) => {
       setDefaults(d)
-      setMaxWs(String(d.maxWorkspacesPerUser))
-      setMaxSbx(String(d.maxSandboxesPerWorkspace))
-      setMaxSandboxCpu(String(d.maxSandboxCpu))
-      setMaxSandboxMemory(String(d.maxSandboxMemory))
-      setMaxIdleTimeout(String(d.maxIdleTimeout))
-      setWsMaxTotalCpu(String(d.wsMaxTotalCpu))
-      setWsMaxTotalMemory(String(d.wsMaxTotalMemory))
-      setWsMaxIdleTimeout(String(d.wsMaxIdleTimeout))
-      setMaxWorkspaceDriveSize(String(d.maxWorkspaceDriveSize))
+      setMaxWs(String(d.max_workspaces_per_user))
+      setMaxSbx(String(d.max_sandboxes_per_workspace))
+      setMaxSandboxCpu(String(d.max_sandbox_cpu))
+      setMaxSandboxMemory(String(d.max_sandbox_memory))
+      setMaxIdleTimeout(String(d.max_idle_timeout))
+      setWsMaxTotalCpu(String(d.ws_max_total_cpu))
+      setWsMaxTotalMemory(String(d.ws_max_total_memory))
+      setWsMaxIdleTimeout(String(d.ws_max_idle_timeout))
+      setMaxWorkspaceDriveSize(String(d.max_workspace_drive_size))
     }).catch(() => {})
   }, [])
 
@@ -347,15 +347,15 @@ function SettingsTab() {
       const totalIdle = parseInt(wsMaxIdleTimeout, 10)
       const driveSize = parseInt(maxWorkspaceDriveSize, 10)
       const updated = await adminSetQuotaDefaults({
-        maxWorkspacesPerUser: ws,
-        maxSandboxesPerWorkspace: sbx,
-        ...(!isNaN(cpu) ? { maxSandboxCpu: cpu } : {}),
-        ...(!isNaN(mem) ? { maxSandboxMemory: mem } : {}),
-        ...(!isNaN(idle) ? { maxIdleTimeout: idle } : {}),
-        ...(!isNaN(totalCpu) ? { wsMaxTotalCpu: totalCpu } : {}),
-        ...(!isNaN(totalMem) ? { wsMaxTotalMemory: totalMem } : {}),
-        ...(!isNaN(totalIdle) ? { wsMaxIdleTimeout: totalIdle } : {}),
-        ...(!isNaN(driveSize) ? { maxWorkspaceDriveSize: driveSize } : {}),
+        max_workspaces_per_user: ws,
+        max_sandboxes_per_workspace: sbx,
+        ...(!isNaN(cpu) ? { max_sandbox_cpu: cpu } : {}),
+        ...(!isNaN(mem) ? { max_sandbox_memory: mem } : {}),
+        ...(!isNaN(idle) ? { max_idle_timeout: idle } : {}),
+        ...(!isNaN(totalCpu) ? { ws_max_total_cpu: totalCpu } : {}),
+        ...(!isNaN(totalMem) ? { ws_max_total_memory: totalMem } : {}),
+        ...(!isNaN(totalIdle) ? { ws_max_idle_timeout: totalIdle } : {}),
+        ...(!isNaN(driveSize) ? { max_workspace_drive_size: driveSize } : {}),
       })
       setDefaults(updated)
       setSaved(true)
@@ -549,7 +549,7 @@ function UserQuotaModal({ user, onClose }: { user: AdminUser; onClose: () => voi
   useEffect(() => {
     adminGetUserQuota(user.id).then((d) => {
       setData(d)
-      setMaxWs(d.overrides?.maxWorkspaces != null ? String(d.overrides.maxWorkspaces) : '')
+      setMaxWs(d.overrides?.max_workspaces != null ? String(d.overrides.max_workspaces) : '')
     }).catch(() => {}).finally(() => setLoading(false))
   }, [user.id])
 
@@ -559,7 +559,7 @@ function UserQuotaModal({ user, onClose }: { user: AdminUser; onClose: () => voi
     setSaving(true)
     try {
       await adminSetUserQuota(user.id, {
-        ...(ws !== undefined ? { maxWorkspaces: ws } : {}),
+        ...(ws !== undefined ? { max_workspaces: ws } : {}),
       })
       onClose()
     } catch {
@@ -608,7 +608,7 @@ function UserQuotaModal({ user, onClose }: { user: AdminUser; onClose: () => voi
                 min="0"
                 value={maxWs}
                 onChange={(e) => setMaxWs(e.target.value)}
-                placeholder={String(data.defaults.maxWorkspacesPerUser)}
+                placeholder={String(data.defaults.max_workspaces_per_user)}
                 className={inputClass}
               />
             </div>
@@ -660,13 +660,13 @@ function WorkspaceQuotaModal({ workspace, onClose }: { workspace: AdminWorkspace
   useEffect(() => {
     adminGetWorkspaceQuota(workspace.id).then((d) => {
       setData(d)
-      setMaxSbx(d.overrides?.maxSandboxes != null ? String(d.overrides.maxSandboxes) : '')
-      setMaxSandboxCpu(d.overrides?.maxSandboxCpu != null ? String(d.overrides.maxSandboxCpu) : '')
-      setMaxSandboxMemory(d.overrides?.maxSandboxMemory != null ? String(d.overrides.maxSandboxMemory) : '')
-      setMaxIdleTimeout(d.overrides?.maxIdleTimeout != null ? String(d.overrides.maxIdleTimeout) : '')
-      setMaxTotalCpu(d.overrides?.maxTotalCpu != null ? String(d.overrides.maxTotalCpu) : '')
-      setMaxTotalMemory(d.overrides?.maxTotalMemory != null ? String(d.overrides.maxTotalMemory) : '')
-      setMaxDriveSize(d.overrides?.maxDriveSize != null ? String(d.overrides.maxDriveSize) : '')
+      setMaxSbx(d.overrides?.max_sandboxes != null ? String(d.overrides.max_sandboxes) : '')
+      setMaxSandboxCpu(d.overrides?.max_sandbox_cpu != null ? String(d.overrides.max_sandbox_cpu) : '')
+      setMaxSandboxMemory(d.overrides?.max_sandbox_memory != null ? String(d.overrides.max_sandbox_memory) : '')
+      setMaxIdleTimeout(d.overrides?.max_idle_timeout != null ? String(d.overrides.max_idle_timeout) : '')
+      setMaxTotalCpu(d.overrides?.max_total_cpu != null ? String(d.overrides.max_total_cpu) : '')
+      setMaxTotalMemory(d.overrides?.max_total_memory != null ? String(d.overrides.max_total_memory) : '')
+      setMaxDriveSize(d.overrides?.max_drive_size != null ? String(d.overrides.max_drive_size) : '')
     }).catch(() => {}).finally(() => setLoading(false))
   }, [workspace.id])
 
@@ -682,13 +682,13 @@ function WorkspaceQuotaModal({ workspace, onClose }: { workspace: AdminWorkspace
       const totalMem = maxTotalMemory !== '' ? parseInt(maxTotalMemory, 10) : undefined
       const drive = maxDriveSize !== '' ? parseInt(maxDriveSize, 10) : undefined
       await adminSetWorkspaceQuota(workspace.id, {
-        ...(sbx !== undefined ? { maxSandboxes: sbx } : {}),
-        ...(cpu !== undefined && !isNaN(cpu) ? { maxSandboxCpu: cpu } : {}),
-        ...(mem !== undefined && !isNaN(mem) ? { maxSandboxMemory: mem } : {}),
-        ...(idle !== undefined && !isNaN(idle) ? { maxIdleTimeout: idle } : {}),
-        ...(totalCpu !== undefined && !isNaN(totalCpu) ? { maxTotalCpu: totalCpu } : {}),
-        ...(totalMem !== undefined && !isNaN(totalMem) ? { maxTotalMemory: totalMem } : {}),
-        ...(drive !== undefined && !isNaN(drive) ? { maxDriveSize: drive } : {}),
+        ...(sbx !== undefined ? { max_sandboxes: sbx } : {}),
+        ...(cpu !== undefined && !isNaN(cpu) ? { max_sandbox_cpu: cpu } : {}),
+        ...(mem !== undefined && !isNaN(mem) ? { max_sandbox_memory: mem } : {}),
+        ...(idle !== undefined && !isNaN(idle) ? { max_idle_timeout: idle } : {}),
+        ...(totalCpu !== undefined && !isNaN(totalCpu) ? { max_total_cpu: totalCpu } : {}),
+        ...(totalMem !== undefined && !isNaN(totalMem) ? { max_total_memory: totalMem } : {}),
+        ...(drive !== undefined && !isNaN(drive) ? { max_drive_size: drive } : {}),
       })
       onClose()
     } catch {
@@ -737,7 +737,7 @@ function WorkspaceQuotaModal({ workspace, onClose }: { workspace: AdminWorkspace
                 min="0"
                 value={maxSbx}
                 onChange={(e) => setMaxSbx(e.target.value)}
-                placeholder={String(data.defaults.maxSandboxes)}
+                placeholder={String(data.defaults.max_sandboxes)}
                 className={inputClass}
               />
             </div>
@@ -750,7 +750,7 @@ function WorkspaceQuotaModal({ workspace, onClose }: { workspace: AdminWorkspace
                 min="0"
                 value={maxSandboxCpu}
                 onChange={(e) => setMaxSandboxCpu(e.target.value)}
-                placeholder={String(data.defaults.maxSandboxCpu)}
+                placeholder={String(data.defaults.max_sandbox_cpu)}
                 className={inputClass}
               />
               <p className="text-xs text-[var(--muted-foreground)] mt-1">Millicores, e.g. 2000 = 2 cores</p>
@@ -764,7 +764,7 @@ function WorkspaceQuotaModal({ workspace, onClose }: { workspace: AdminWorkspace
                 min="0"
                 value={maxSandboxMemory}
                 onChange={(e) => setMaxSandboxMemory(e.target.value)}
-                placeholder={String(data.defaults.maxSandboxMemory)}
+                placeholder={String(data.defaults.max_sandbox_memory)}
                 className={inputClass}
               />
               <p className="text-xs text-[var(--muted-foreground)] mt-1">Bytes, e.g. 2147483648 = 2 GiB</p>
@@ -778,7 +778,7 @@ function WorkspaceQuotaModal({ workspace, onClose }: { workspace: AdminWorkspace
                 min="0"
                 value={maxIdleTimeout}
                 onChange={(e) => setMaxIdleTimeout(e.target.value)}
-                placeholder={String(data.defaults.maxIdleTimeout)}
+                placeholder={String(data.defaults.max_idle_timeout)}
                 className={inputClass}
               />
               <p className="text-xs text-[var(--muted-foreground)] mt-1">Seconds, e.g. 1800 = 30 min. Use 0 to disable.</p>
@@ -792,7 +792,7 @@ function WorkspaceQuotaModal({ workspace, onClose }: { workspace: AdminWorkspace
                 min="0"
                 value={maxTotalCpu}
                 onChange={(e) => setMaxTotalCpu(e.target.value)}
-                placeholder={String(data.defaults.maxTotalCpu)}
+                placeholder={String(data.defaults.max_total_cpu)}
                 className={inputClass}
               />
               <p className="text-xs text-[var(--muted-foreground)] mt-1">Total millicores across all sandboxes. 0 = unlimited.</p>
@@ -806,7 +806,7 @@ function WorkspaceQuotaModal({ workspace, onClose }: { workspace: AdminWorkspace
                 min="0"
                 value={maxTotalMemory}
                 onChange={(e) => setMaxTotalMemory(e.target.value)}
-                placeholder={String(data.defaults.maxTotalMemory)}
+                placeholder={String(data.defaults.max_total_memory)}
                 className={inputClass}
               />
               <p className="text-xs text-[var(--muted-foreground)] mt-1">Total bytes across all sandboxes. 0 = unlimited.</p>
@@ -820,7 +820,7 @@ function WorkspaceQuotaModal({ workspace, onClose }: { workspace: AdminWorkspace
                 min="0"
                 value={maxDriveSize}
                 onChange={(e) => setMaxDriveSize(e.target.value)}
-                placeholder={String(data.defaults.maxDriveSize)}
+                placeholder={String(data.defaults.max_drive_size)}
                 className={inputClass}
               />
               <p className="text-xs text-[var(--muted-foreground)] mt-1">Bytes, e.g. 10737418240 = 10 GiB. Applied on creation.</p>

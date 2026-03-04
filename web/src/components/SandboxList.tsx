@@ -94,7 +94,7 @@ export function SandboxList({
   const [confirmPause, setConfirmPause] = useState<{ id: string; name: string } | null>(null)
   const [confirmDeleteWs, setConfirmDeleteWs] = useState<{ id: string; name: string } | null>(null)
   const [showCreateWs, setShowCreateWs] = useState(false)
-  const [agentCodeData, setAgentCodeData] = useState<{ code: string; expiresAt: string; command: string } | null>(null)
+  const [agentCodeData, setAgentCodeData] = useState<{ code: string; expires_at: string; command: string } | null>(null)
   const [quotaError, setQuotaError] = useState<string | null>(null)
   const [theme, setThemeState] = useState<'system' | 'light' | 'dark'>(() => {
     return (localStorage.getItem('theme') as 'light' | 'dark') || 'system'
@@ -401,7 +401,7 @@ export function SandboxList({
           >
             <StatusDot status={sbx.status} />
             <span className="flex-1 truncate">{sbx.name}</span>
-            {sbx.isLocal ? (
+            {sbx.is_local ? (
               <span className="shrink-0 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-medium text-emerald-400">
                 local
               </span>
@@ -415,7 +415,7 @@ export function SandboxList({
               </span>
             )}
             <div className="hidden gap-0.5 group-hover:flex">
-              {!sbx.isLocal && sbx.status === 'running' && (
+              {!sbx.is_local && sbx.status === 'running' && (
                 <button
                   onClick={(e) => handlePause(sbx.id, e)}
                   className="rounded p-1 hover:bg-[var(--muted-foreground)]/20"
@@ -424,7 +424,7 @@ export function SandboxList({
                   <Pause size={12} />
                 </button>
               )}
-              {!sbx.isLocal && sbx.status === 'paused' && (
+              {!sbx.is_local && sbx.status === 'paused' && (
                 <button
                   onClick={(e) => handleResume(sbx.id, e)}
                   className="rounded p-1 hover:bg-[var(--muted-foreground)]/20"
@@ -592,7 +592,7 @@ export function SandboxList({
                 </button>
               </div>
               <p className="text-xs text-[var(--muted-foreground)]">
-                Code expires at {new Date(agentCodeData.expiresAt).toLocaleString()}. It can only be used once.
+                Code expires at {new Date(agentCodeData.expires_at).toLocaleString()}. It can only be used once.
               </p>
             </div>
             <div className="flex justify-end mt-5">

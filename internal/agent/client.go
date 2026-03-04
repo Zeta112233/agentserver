@@ -59,9 +59,9 @@ func Register(serverURL, code, name string) (*Config, error) {
 	}
 
 	var result struct {
-		SandboxID   string `json:"sandboxId"`
-		TunnelToken string `json:"tunnelToken"`
-		WorkspaceID string `json:"workspaceId"`
+		SandboxID   string `json:"sandbox_id"`
+		TunnelToken string `json:"tunnel_token"`
+		WorkspaceID string `json:"workspace_id"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)

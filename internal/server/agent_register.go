@@ -40,8 +40,8 @@ func (s *Server) handleCreateAgentCode(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
-		"code":      code,
-		"expiresAt": expiresAt.Format(time.RFC3339),
+		"code":       code,
+		"expires_at": expiresAt.Format(time.RFC3339),
 	})
 }
 
@@ -99,8 +99,8 @@ func (s *Server) handleAgentRegister(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(map[string]string{
-		"sandboxId":   sandboxID,
-		"tunnelToken": tunnelToken,
-		"workspaceId": arc.WorkspaceID,
+		"sandbox_id":   sandboxID,
+		"tunnel_token": tunnelToken,
+		"workspace_id": arc.WorkspaceID,
 	})
 }

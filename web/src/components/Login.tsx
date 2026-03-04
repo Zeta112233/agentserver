@@ -24,7 +24,7 @@ export function Login({ onSuccess }: LoginProps) {
   useEffect(() => {
     getOIDCProviders().then((data) => {
       setOidcProviders(data.providers)
-      setPasswordAuth(data.passwordAuth)
+      setPasswordAuth(data.password_auth)
       setProvidersLoaded(true)
     })
   }, [])

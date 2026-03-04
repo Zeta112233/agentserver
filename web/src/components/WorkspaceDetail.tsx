@@ -40,7 +40,7 @@ export function WorkspaceDetail({ workspace }: WorkspaceDetailProps) {
     listMembers(workspace.id).then(setMembers).catch(() => {})
     getWorkspaceDefaults(workspace.id).then((d) => {
       setDefaults(d)
-      setSbxQuota({ current: d.currentSandboxes, max: d.maxSandboxes })
+      setSbxQuota({ current: d.current_sandboxes, max: d.max_sandboxes })
     }).catch(() => {})
   }, [workspace.id])
 
@@ -112,7 +112,7 @@ function OverviewTab({ workspace, sbxQuota, defaults }: {
     <div className="flex flex-col gap-6 max-w-3xl">
       {/* Info cards */}
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
-        <InfoCard icon={<Clock size={14} />} label="Created" value={new Date(workspace.createdAt).toLocaleString()} />
+        <InfoCard icon={<Clock size={14} />} label="Created" value={new Date(workspace.created_at).toLocaleString()} />
         {sbxQuota && (
           <InfoCard
             icon={<Box size={14} />}
@@ -129,10 +129,10 @@ function OverviewTab({ workspace, sbxQuota, defaults }: {
             <span className="text-sm font-medium text-[var(--foreground)]">Resource Limits</span>
           </div>
           <div className="grid grid-cols-2 gap-px bg-[var(--border)] sm:grid-cols-4">
-            <StatCell label="Max CPU" value={`${(defaults.maxSandboxCpu / 1000).toFixed(1)} cores`} />
-            <StatCell label="Max Memory" value={`${Math.round(defaults.maxSandboxMemory / (1024 * 1024))} MB`} />
-            <StatCell label="Max Idle" value={defaults.maxIdleTimeout > 0 ? `${Math.round(defaults.maxIdleTimeout / 60)} min` : 'Unlimited'} />
-            <StatCell label="Max Sandboxes" value={defaults.maxSandboxes === 0 ? '\u221E' : String(defaults.maxSandboxes)} />
+            <StatCell label="Max CPU" value={`${(defaults.max_sandbox_cpu / 1000).toFixed(1)} cores`} />
+            <StatCell label="Max Memory" value={`${Math.round(defaults.max_sandbox_memory / (1024 * 1024))} MB`} />
+            <StatCell label="Max Idle" value={defaults.max_idle_timeout > 0 ? `${Math.round(defaults.max_idle_timeout / 60)} min` : 'Unlimited'} />
+            <StatCell label="Max Sandboxes" value={defaults.max_sandboxes === 0 ? '\u221E' : String(defaults.max_sandboxes)} />
           </div>
         </div>
       )}
@@ -169,7 +169,7 @@ function MembersTab({ workspaceId, members, setMembers }: {
     setConfirmRemove(null)
     try {
       await removeMember(workspaceId, userId)
-      setMembers((prev) => prev.filter((m) => m.userId !== userId))
+      setMembers((prev) => prev.filter((m) => m.user_id !== userId))
     } catch { /* ignore */ }
   }
 
@@ -238,7 +238,7 @@ function MembersTab({ workspaceId, members, setMembers }: {
         ) : (
           <div className="divide-y divide-[var(--border)]">
             {members.map((m) => (
-              <div key={m.userId} className="group flex items-center justify-between px-4 py-3 hover:bg-[var(--secondary)]/30 transition-colors">
+              <div key={m.user_id} className="group flex items-center justify-between px-4 py-3 hover:bg-[var(--secondary)]/30 transition-colors">
                 <div className="flex items-center gap-3 min-w-0">
                   <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--secondary)] text-xs font-medium text-[var(--foreground)]">
                     {(m.username || '?')[0].toUpperCase()}
@@ -271,7 +271,7 @@ function MembersTab({ workspaceId, members, setMembers }: {
           message={`Remove "${confirmRemove.username}" from this workspace?`}
           confirmLabel="Remove"
           destructive
-          onConfirm={() => doRemove(confirmRemove.userId)}
+          onConfirm={() => doRemove(confirmRemove.user_id)}
           onCancel={() => setConfirmRemove(null)}
         />
       )}

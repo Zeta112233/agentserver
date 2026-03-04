@@ -43,7 +43,7 @@ func (s *Server) handleAdminListUsers(w http.ResponseWriter, r *http.Request) {
 		Email     string  `json:"email"`
 		Name      *string `json:"name"`
 		Role      string  `json:"role"`
-		CreatedAt string  `json:"createdAt"`
+		CreatedAt string  `json:"created_at"`
 	}
 
 	resp := make([]adminUserResponse, len(users))
@@ -90,12 +90,12 @@ func (s *Server) handleAdminListSandboxes(w http.ResponseWriter, r *http.Request
 	type adminSandboxResponse struct {
 		ID             string  `json:"id"`
 		Name           string  `json:"name"`
-		WorkspaceID    string  `json:"workspaceId"`
+		WorkspaceID    string  `json:"workspace_id"`
 		Type           string  `json:"type"`
 		Status         string  `json:"status"`
-		CreatedAt      string  `json:"createdAt"`
-		LastActivityAt *string `json:"lastActivityAt"`
-		IsLocal        bool    `json:"isLocal"`
+		CreatedAt      string  `json:"created_at"`
+		LastActivityAt *string `json:"last_activity_at"`
+		IsLocal        bool    `json:"is_local"`
 	}
 
 	resp := make([]adminSandboxResponse, len(sandboxes))
@@ -148,29 +148,29 @@ func (s *Server) handleAdminGetQuotaDefaults(w http.ResponseWriter, r *http.Requ
 	rd := s.getResourceDefaults()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"maxWorkspacesPerUser":     rd.MaxWorkspacesPerUser,
-		"maxSandboxesPerWorkspace": rd.MaxSandboxesPerWorkspace,
-		"maxWorkspaceDriveSize":    rd.MaxWorkspaceDriveSize,
-		"maxSandboxCpu":            rd.MaxSandboxCPU,
-		"maxSandboxMemory":         rd.MaxSandboxMemory,
-		"maxIdleTimeout":           rd.MaxIdleTimeout,
-		"wsMaxTotalCpu":            rd.WsMaxTotalCPU,
-		"wsMaxTotalMemory":         rd.WsMaxTotalMemory,
-		"wsMaxIdleTimeout":         rd.WsMaxIdleTimeout,
+		"max_workspaces_per_user":      rd.MaxWorkspacesPerUser,
+		"max_sandboxes_per_workspace":  rd.MaxSandboxesPerWorkspace,
+		"max_workspace_drive_size":     rd.MaxWorkspaceDriveSize,
+		"max_sandbox_cpu":              rd.MaxSandboxCPU,
+		"max_sandbox_memory":           rd.MaxSandboxMemory,
+		"max_idle_timeout":             rd.MaxIdleTimeout,
+		"ws_max_total_cpu":             rd.WsMaxTotalCPU,
+		"ws_max_total_memory":          rd.WsMaxTotalMemory,
+		"ws_max_idle_timeout":          rd.WsMaxIdleTimeout,
 	})
 }
 
 func (s *Server) handleAdminSetQuotaDefaults(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		MaxWorkspacesPerUser     *int   `json:"maxWorkspacesPerUser"`
-		MaxSandboxesPerWorkspace *int   `json:"maxSandboxesPerWorkspace"`
-		MaxWorkspaceDriveSize    *int64 `json:"maxWorkspaceDriveSize"`
-		MaxSandboxCPU            *int   `json:"maxSandboxCpu"`
-		MaxSandboxMemory         *int64 `json:"maxSandboxMemory"`
-		MaxIdleTimeout           *int   `json:"maxIdleTimeout"`
-		WsMaxTotalCPU            *int   `json:"wsMaxTotalCpu"`
-		WsMaxTotalMemory         *int64 `json:"wsMaxTotalMemory"`
-		WsMaxIdleTimeout         *int   `json:"wsMaxIdleTimeout"`
+		MaxWorkspacesPerUser     *int   `json:"max_workspaces_per_user"`
+		MaxSandboxesPerWorkspace *int   `json:"max_sandboxes_per_workspace"`
+		MaxWorkspaceDriveSize    *int64 `json:"max_workspace_drive_size"`
+		MaxSandboxCPU            *int   `json:"max_sandbox_cpu"`
+		MaxSandboxMemory         *int64 `json:"max_sandbox_memory"`
+		MaxIdleTimeout           *int   `json:"max_idle_timeout"`
+		WsMaxTotalCPU            *int   `json:"ws_max_total_cpu"`
+		WsMaxTotalMemory         *int64 `json:"ws_max_total_memory"`
+		WsMaxIdleTimeout         *int   `json:"ws_max_idle_timeout"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
@@ -179,7 +179,7 @@ func (s *Server) handleAdminSetQuotaDefaults(w http.ResponseWriter, r *http.Requ
 
 	if req.MaxWorkspacesPerUser != nil {
 		if *req.MaxWorkspacesPerUser < 0 {
-			http.Error(w, "maxWorkspacesPerUser must be >= 0", http.StatusBadRequest)
+			http.Error(w, "max_workspaces_per_user must be >= 0", http.StatusBadRequest)
 			return
 		}
 		if err := s.DB.SetSystemSetting(settingKeyMaxWorkspaces, strconv.Itoa(*req.MaxWorkspacesPerUser)); err != nil {
@@ -190,7 +190,7 @@ func (s *Server) handleAdminSetQuotaDefaults(w http.ResponseWriter, r *http.Requ
 	}
 	if req.MaxSandboxesPerWorkspace != nil {
 		if *req.MaxSandboxesPerWorkspace < 0 {
-			http.Error(w, "maxSandboxesPerWorkspace must be >= 0", http.StatusBadRequest)
+			http.Error(w, "max_sandboxes_per_workspace must be >= 0", http.StatusBadRequest)
 			return
 		}
 		if err := s.DB.SetSystemSetting(settingKeyMaxSandboxes, strconv.Itoa(*req.MaxSandboxesPerWorkspace)); err != nil {
@@ -252,15 +252,15 @@ func (s *Server) handleAdminSetQuotaDefaults(w http.ResponseWriter, r *http.Requ
 	rd := s.getResourceDefaults()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"maxWorkspacesPerUser":     rd.MaxWorkspacesPerUser,
-		"maxSandboxesPerWorkspace": rd.MaxSandboxesPerWorkspace,
-		"maxWorkspaceDriveSize":    rd.MaxWorkspaceDriveSize,
-		"maxSandboxCpu":            rd.MaxSandboxCPU,
-		"maxSandboxMemory":         rd.MaxSandboxMemory,
-		"maxIdleTimeout":           rd.MaxIdleTimeout,
-		"wsMaxTotalCpu":            rd.WsMaxTotalCPU,
-		"wsMaxTotalMemory":         rd.WsMaxTotalMemory,
-		"wsMaxIdleTimeout":         rd.WsMaxIdleTimeout,
+		"max_workspaces_per_user":      rd.MaxWorkspacesPerUser,
+		"max_sandboxes_per_workspace":  rd.MaxSandboxesPerWorkspace,
+		"max_workspace_drive_size":     rd.MaxWorkspaceDriveSize,
+		"max_sandbox_cpu":              rd.MaxSandboxCPU,
+		"max_sandbox_memory":           rd.MaxSandboxMemory,
+		"max_idle_timeout":             rd.MaxIdleTimeout,
+		"ws_max_total_cpu":             rd.WsMaxTotalCPU,
+		"ws_max_total_memory":          rd.WsMaxTotalMemory,
+		"ws_max_idle_timeout":          rd.WsMaxIdleTimeout,
 	})
 }
 
@@ -269,7 +269,7 @@ func (s *Server) handleAdminGetUserQuota(w http.ResponseWriter, r *http.Request)
 
 	rd := s.getResourceDefaults()
 	defaults := map[string]interface{}{
-		"maxWorkspacesPerUser": rd.MaxWorkspacesPerUser,
+		"max_workspaces_per_user": rd.MaxWorkspacesPerUser,
 	}
 
 	uq, err := s.DB.GetUserQuota(targetID)
@@ -282,8 +282,8 @@ func (s *Server) handleAdminGetUserQuota(w http.ResponseWriter, r *http.Request)
 	var overrides interface{}
 	if uq != nil {
 		overrides = map[string]interface{}{
-			"maxWorkspaces": uq.MaxWorkspaces,
-			"updatedAt":     uq.UpdatedAt.Format(time.RFC3339),
+			"max_workspaces": uq.MaxWorkspaces,
+			"updated_at":     uq.UpdatedAt.Format(time.RFC3339),
 		}
 	}
 
@@ -298,7 +298,7 @@ func (s *Server) handleAdminSetUserQuota(w http.ResponseWriter, r *http.Request)
 	targetID := chi.URLParam(r, "id")
 
 	var req struct {
-		MaxWorkspaces *int `json:"maxWorkspaces"`
+		MaxWorkspaces *int `json:"max_workspaces"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
@@ -306,7 +306,7 @@ func (s *Server) handleAdminSetUserQuota(w http.ResponseWriter, r *http.Request)
 	}
 
 	if req.MaxWorkspaces != nil && *req.MaxWorkspaces < 0 {
-		http.Error(w, "maxWorkspaces must be >= 0", http.StatusBadRequest)
+		http.Error(w, "max_workspaces must be >= 0", http.StatusBadRequest)
 		return
 	}
 
@@ -336,13 +336,13 @@ func (s *Server) handleAdminGetWorkspaceQuota(w http.ResponseWriter, r *http.Req
 
 	rd := s.getResourceDefaults()
 	defaults := map[string]interface{}{
-		"maxSandboxes":     rd.MaxSandboxesPerWorkspace,
-		"maxSandboxCpu":    rd.MaxSandboxCPU,
-		"maxSandboxMemory": rd.MaxSandboxMemory,
-		"maxIdleTimeout":   rd.MaxIdleTimeout,
-		"maxTotalCpu":      rd.WsMaxTotalCPU,
-		"maxTotalMemory":   rd.WsMaxTotalMemory,
-		"maxDriveSize":     rd.MaxWorkspaceDriveSize,
+		"max_sandboxes":      rd.MaxSandboxesPerWorkspace,
+		"max_sandbox_cpu":    rd.MaxSandboxCPU,
+		"max_sandbox_memory": rd.MaxSandboxMemory,
+		"max_idle_timeout":   rd.MaxIdleTimeout,
+		"max_total_cpu":      rd.WsMaxTotalCPU,
+		"max_total_memory":   rd.WsMaxTotalMemory,
+		"max_drive_size":     rd.MaxWorkspaceDriveSize,
 	}
 
 	wq, err := s.DB.GetWorkspaceQuota(workspaceID)
@@ -355,14 +355,14 @@ func (s *Server) handleAdminGetWorkspaceQuota(w http.ResponseWriter, r *http.Req
 	var overrides interface{}
 	if wq != nil {
 		overrides = map[string]interface{}{
-			"maxSandboxes":     wq.MaxSandboxes,
-			"maxSandboxCpu":    wq.MaxSandboxCPU,
-			"maxSandboxMemory": wq.MaxSandboxMemory,
-			"maxIdleTimeout":   wq.MaxIdleTimeout,
-			"maxTotalCpu":      wq.MaxTotalCPU,
-			"maxTotalMemory":   wq.MaxTotalMemory,
-			"maxDriveSize":     wq.MaxDriveSize,
-			"updatedAt":        wq.UpdatedAt.Format(time.RFC3339),
+			"max_sandboxes":      wq.MaxSandboxes,
+			"max_sandbox_cpu":    wq.MaxSandboxCPU,
+			"max_sandbox_memory": wq.MaxSandboxMemory,
+			"max_idle_timeout":   wq.MaxIdleTimeout,
+			"max_total_cpu":      wq.MaxTotalCPU,
+			"max_total_memory":   wq.MaxTotalMemory,
+			"max_drive_size":     wq.MaxDriveSize,
+			"updated_at":         wq.UpdatedAt.Format(time.RFC3339),
 		}
 	}
 
@@ -377,13 +377,13 @@ func (s *Server) handleAdminSetWorkspaceQuota(w http.ResponseWriter, r *http.Req
 	workspaceID := chi.URLParam(r, "id")
 
 	var req struct {
-		MaxSandboxes     *int   `json:"maxSandboxes"`
-		MaxSandboxCPU    *int   `json:"maxSandboxCpu"`
-		MaxSandboxMemory *int64 `json:"maxSandboxMemory"`
-		MaxIdleTimeout   *int   `json:"maxIdleTimeout"`
-		MaxTotalCPU      *int   `json:"maxTotalCpu"`
-		MaxTotalMemory   *int64 `json:"maxTotalMemory"`
-		MaxDriveSize     *int64 `json:"maxDriveSize"`
+		MaxSandboxes     *int   `json:"max_sandboxes"`
+		MaxSandboxCPU    *int   `json:"max_sandbox_cpu"`
+		MaxSandboxMemory *int64 `json:"max_sandbox_memory"`
+		MaxIdleTimeout   *int   `json:"max_idle_timeout"`
+		MaxTotalCPU      *int   `json:"max_total_cpu"`
+		MaxTotalMemory   *int64 `json:"max_total_memory"`
+		MaxDriveSize     *int64 `json:"max_drive_size"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
@@ -391,7 +391,7 @@ func (s *Server) handleAdminSetWorkspaceQuota(w http.ResponseWriter, r *http.Req
 	}
 
 	if req.MaxSandboxes != nil && *req.MaxSandboxes < 0 {
-		http.Error(w, "maxSandboxes must be >= 0", http.StatusBadRequest)
+		http.Error(w, "max_sandboxes must be >= 0", http.StatusBadRequest)
 		return
 	}
 

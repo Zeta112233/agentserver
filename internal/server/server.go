@@ -171,7 +171,7 @@ func (s *Server) Router() http.Handler {
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]interface{}{
 				"providers":    s.OIDC.ProviderNames(),
-				"passwordAuth": s.PasswordAuthEnabled,
+				"password_auth": s.PasswordAuthEnabled,
 			})
 		})
 		r.Get("/api/auth/oidc/{provider}/login", s.handleOIDCLogin)
@@ -180,8 +180,8 @@ func (s *Server) Router() http.Handler {
 		r.Get("/api/auth/oidc/providers", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]interface{}{
-				"providers":    []string{},
-				"passwordAuth": s.PasswordAuthEnabled,
+				"providers":      []string{},
+				"password_auth": s.PasswordAuthEnabled,
 			})
 		})
 	}
@@ -369,33 +369,33 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 type workspaceResponse struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
-	CreatedAt string `json:"createdAt"`
-	UpdatedAt string `json:"updatedAt"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
 }
 
 type workspaceMemberResponse struct {
-	UserID   string `json:"userId"`
+	UserID   string `json:"user_id"`
 	Username string `json:"username"`
 	Role     string `json:"role"`
 }
 
 type sandboxResponse struct {
 	ID              string  `json:"id"`
-	ShortID         string  `json:"shortId,omitempty"`
-	WorkspaceID     string  `json:"workspaceId"`
+	ShortID         string  `json:"short_id,omitempty"`
+	WorkspaceID     string  `json:"workspace_id"`
 	Name            string  `json:"name"`
 	Type            string  `json:"type"`
 	Status          string  `json:"status"`
-	OpencodeURL     string  `json:"opencodeUrl,omitempty"`
-	OpenclawURL     string  `json:"openclawUrl,omitempty"`
-	CreatedAt       string  `json:"createdAt"`
-	LastActivityAt  *string `json:"lastActivityAt"`
-	PausedAt        *string `json:"pausedAt"`
-	IsLocal         bool    `json:"isLocal"`
-	LastHeartbeatAt *string `json:"lastHeartbeatAt,omitempty"`
+	OpencodeURL     string  `json:"opencode_url,omitempty"`
+	OpenclawURL     string  `json:"openclaw_url,omitempty"`
+	CreatedAt       string  `json:"created_at"`
+	LastActivityAt  *string `json:"last_activity_at"`
+	PausedAt        *string `json:"paused_at"`
+	IsLocal         bool    `json:"is_local"`
+	LastHeartbeatAt *string `json:"last_heartbeat_at,omitempty"`
 	CPU             int     `json:"cpu,omitempty"`
 	Memory          int64   `json:"memory,omitempty"`
-	IdleTimeout     *int    `json:"idleTimeout,omitempty"`
+	IdleTimeout     *int    `json:"idle_timeout,omitempty"`
 }
 
 func (s *Server) toWorkspaceResponse(ws *db.Workspace) workspaceResponse {
@@ -809,11 +809,11 @@ func (s *Server) handleGetWorkspaceDefaults(w http.ResponseWriter, r *http.Reque
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"maxSandboxCpu":    wd.MaxSandboxCPU,
-		"maxSandboxMemory": wd.MaxSandboxMemory,
-		"maxIdleTimeout":   wd.MaxIdleTimeout,
-		"maxSandboxes":     wd.MaxSandboxes,
-		"currentSandboxes": currentSandboxes,
+		"max_sandbox_cpu":    wd.MaxSandboxCPU,
+		"max_sandbox_memory": wd.MaxSandboxMemory,
+		"max_idle_timeout":   wd.MaxIdleTimeout,
+		"max_sandboxes":      wd.MaxSandboxes,
+		"current_sandboxes":  currentSandboxes,
 	})
 }
 
@@ -873,7 +873,7 @@ func (s *Server) handleCreateSandbox(w http.ResponseWriter, r *http.Request) {
 		Type        string `json:"type"`
 		CPU         *int   `json:"cpu"`
 		Memory      *int64 `json:"memory"`
-		IdleTimeout *int   `json:"idleTimeout"`
+		IdleTimeout *int   `json:"idle_timeout"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		req.Name = "New Sandbox"
@@ -908,7 +908,7 @@ func (s *Server) handleCreateSandbox(w http.ResponseWriter, r *http.Request) {
 	var idleTimeout *int
 	if req.IdleTimeout != nil {
 		if *req.IdleTimeout < 0 || (wd.MaxIdleTimeout > 0 && (*req.IdleTimeout == 0 || *req.IdleTimeout > wd.MaxIdleTimeout)) {
-			http.Error(w, fmt.Sprintf("idleTimeout must be between 1 and %d seconds", wd.MaxIdleTimeout), http.StatusBadRequest)
+			http.Error(w, fmt.Sprintf("idle_timeout must be between 1 and %d seconds", wd.MaxIdleTimeout), http.StatusBadRequest)
 			return
 		}
 		idleTimeout = req.IdleTimeout

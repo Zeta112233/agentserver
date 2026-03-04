@@ -4,32 +4,32 @@ export type WorkspaceRole = 'owner' | 'maintainer' | 'developer' | 'guest'
 export interface Workspace {
   id: string
   name: string
-  createdAt: string
-  updatedAt: string
+  created_at: string
+  updated_at: string
 }
 
 export interface WorkspaceMember {
-  userId: string
+  user_id: string
   username: string
   role: WorkspaceRole
 }
 
 export interface Sandbox {
   id: string
-  workspaceId: string
+  workspace_id: string
   name: string
   type: string
   status: SandboxStatus
-  opencodeUrl?: string
-  openclawUrl?: string
-  createdAt: string
-  lastActivityAt: string | null
-  pausedAt: string | null
-  isLocal: boolean
-  lastHeartbeatAt?: string | null
+  opencode_url?: string
+  openclaw_url?: string
+  created_at: string
+  last_activity_at: string | null
+  paused_at: string | null
+  is_local: boolean
+  last_heartbeat_at?: string | null
   cpu?: number
   memory?: number
-  idleTimeout?: number
+  idle_timeout?: number
 }
 
 export async function login(username: string, password: string): Promise<boolean> {
@@ -55,13 +55,13 @@ export async function checkAuth(): Promise<boolean> {
   return res.ok
 }
 
-export async function getOIDCProviders(): Promise<{ providers: string[]; passwordAuth: boolean }> {
+export async function getOIDCProviders(): Promise<{ providers: string[]; password_auth: boolean }> {
   const res = await fetch('/api/auth/oidc/providers')
-  if (!res.ok) return { providers: [], passwordAuth: true }
+  if (!res.ok) return { providers: [], password_auth: true }
   const data = await res.json()
   return {
     providers: data.providers || [],
-    passwordAuth: data.passwordAuth !== false,
+    password_auth: data.password_auth !== false,
   }
 }
 
@@ -161,11 +161,11 @@ export async function removeMember(workspaceId: string, userId: string): Promise
 // Sandbox API
 
 export interface WorkspaceSandboxDefaults {
-  maxSandboxCpu: number    // millicores
-  maxSandboxMemory: number // bytes
-  maxIdleTimeout: number   // seconds
-  maxSandboxes: number     // 0 = unlimited
-  currentSandboxes: number
+  max_sandbox_cpu: number    // millicores
+  max_sandbox_memory: number // bytes
+  max_idle_timeout: number   // seconds
+  max_sandboxes: number      // 0 = unlimited
+  current_sandboxes: number
 }
 
 export async function getWorkspaceDefaults(workspaceId: string): Promise<WorkspaceSandboxDefaults> {
@@ -194,7 +194,7 @@ export async function createSandbox(
   }
   if (cpu !== undefined) body.cpu = cpu
   if (memory !== undefined) body.memory = memory
-  if (idleTimeout !== undefined) body.idleTimeout = idleTimeout
+  if (idleTimeout !== undefined) body.idle_timeout = idleTimeout
   const res = await fetch(`/api/workspaces/${workspaceId}/sandboxes`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -234,25 +234,25 @@ export async function resumeSandbox(id: string): Promise<void> {
 export interface UsageSummary {
   provider: string
   model: string
-  inputTokens: number
-  outputTokens: number
-  cacheCreationInputTokens: number
-  cacheReadInputTokens: number
-  requestCount: number
+  input_tokens: number
+  output_tokens: number
+  cache_creation_input_tokens: number
+  cache_read_input_tokens: number
+  request_count: number
 }
 
 export interface TraceItem {
   id: string
-  sandboxId: string
-  workspaceId: string
+  sandbox_id: string
+  workspace_id: string
   source: string
-  createdAt: string
-  updatedAt: string
-  requestCount: number
-  totalInputTokens: number
-  totalOutputTokens: number
-  totalCacheReadTokens: number
-  totalCacheCreationTokens: number
+  created_at: string
+  updated_at: string
+  request_count: number
+  total_input_tokens: number
+  total_output_tokens: number
+  total_cache_read_tokens: number
+  total_cache_creation_tokens: number
   models: string
 }
 
@@ -279,7 +279,7 @@ export async function getSandboxTraces(id: string, limit: number, offset: number
 
 // Agent registration code API
 
-export async function createAgentCode(workspaceId: string): Promise<{ code: string; expiresAt: string }> {
+export async function createAgentCode(workspaceId: string): Promise<{ code: string; expires_at: string }> {
   const res = await fetch(`/api/workspaces/${workspaceId}/agent-code`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -296,25 +296,25 @@ export interface AdminUser {
   email: string
   name: string | null
   role: string
-  createdAt: string
+  created_at: string
 }
 
 export interface AdminWorkspace {
   id: string
   name: string
-  createdAt: string
-  updatedAt: string
+  created_at: string
+  updated_at: string
 }
 
 export interface AdminSandbox {
   id: string
   name: string
-  workspaceId: string
+  workspace_id: string
   type: string
   status: string
-  createdAt: string
-  lastActivityAt: string | null
-  isLocal: boolean
+  created_at: string
+  last_activity_at: string | null
+  is_local: boolean
 }
 
 export async function adminListUsers(): Promise<AdminUser[]> {
@@ -347,46 +347,46 @@ export async function adminUpdateUserRole(userId: string, role: string): Promise
 // Quota types
 
 export interface QuotaDefaults {
-  maxWorkspacesPerUser: number
-  maxSandboxesPerWorkspace: number
-  maxWorkspaceDriveSize: number   // bytes
-  maxSandboxCpu: number           // millicores
-  maxSandboxMemory: number        // bytes
-  maxIdleTimeout: number          // seconds
-  wsMaxTotalCpu: number           // millicores
-  wsMaxTotalMemory: number        // bytes
-  wsMaxIdleTimeout: number        // seconds
+  max_workspaces_per_user: number
+  max_sandboxes_per_workspace: number
+  max_workspace_drive_size: number   // bytes
+  max_sandbox_cpu: number           // millicores
+  max_sandbox_memory: number        // bytes
+  max_idle_timeout: number          // seconds
+  ws_max_total_cpu: number           // millicores
+  ws_max_total_memory: number        // bytes
+  ws_max_idle_timeout: number        // seconds
 }
 
 export interface UserQuotaOverrides {
-  maxWorkspaces: number | null
-  updatedAt: string
+  max_workspaces: number | null
+  updated_at: string
 }
 
 export interface UserQuotaResponse {
-  defaults: { maxWorkspacesPerUser: number }
+  defaults: { max_workspaces_per_user: number }
   overrides: UserQuotaOverrides | null
 }
 
 export interface WorkspaceQuotaOverrides {
-  maxSandboxes: number | null
-  maxSandboxCpu: number | null    // millicores
-  maxSandboxMemory: number | null // bytes
-  maxIdleTimeout: number | null   // seconds
-  maxTotalCpu: number | null      // millicores
-  maxTotalMemory: number | null   // bytes
-  maxDriveSize: number | null     // bytes
-  updatedAt: string
+  max_sandboxes: number | null
+  max_sandbox_cpu: number | null    // millicores
+  max_sandbox_memory: number | null // bytes
+  max_idle_timeout: number | null   // seconds
+  max_total_cpu: number | null      // millicores
+  max_total_memory: number | null   // bytes
+  max_drive_size: number | null     // bytes
+  updated_at: string
 }
 
 export interface WorkspaceQuotaDefaults {
-  maxSandboxes: number
-  maxSandboxCpu: number           // millicores
-  maxSandboxMemory: number        // bytes
-  maxIdleTimeout: number          // seconds
-  maxTotalCpu: number             // millicores
-  maxTotalMemory: number          // bytes
-  maxDriveSize: number            // bytes
+  max_sandboxes: number
+  max_sandbox_cpu: number           // millicores
+  max_sandbox_memory: number        // bytes
+  max_idle_timeout: number          // seconds
+  max_total_cpu: number             // millicores
+  max_total_memory: number          // bytes
+  max_drive_size: number            // bytes
 }
 
 export interface WorkspaceQuotaResponse {
@@ -437,7 +437,7 @@ export async function adminGetUserQuota(userId: string): Promise<UserQuotaRespon
 export async function adminSetUserQuota(
   userId: string,
   overrides: {
-    maxWorkspaces?: number
+    max_workspaces?: number
   }
 ): Promise<void> {
   const res = await fetch(`/api/admin/users/${userId}/quota`, {
@@ -464,13 +464,13 @@ export async function adminGetWorkspaceQuota(workspaceId: string): Promise<Works
 export async function adminSetWorkspaceQuota(
   workspaceId: string,
   overrides: {
-    maxSandboxes?: number
-    maxSandboxCpu?: number
-    maxSandboxMemory?: number
-    maxIdleTimeout?: number
-    maxTotalCpu?: number
-    maxTotalMemory?: number
-    maxDriveSize?: number
+    max_sandboxes?: number
+    max_sandbox_cpu?: number
+    max_sandbox_memory?: number
+    max_idle_timeout?: number
+    max_total_cpu?: number
+    max_total_memory?: number
+    max_drive_size?: number
   }
 ): Promise<void> {
   const res = await fetch(`/api/admin/workspaces/${workspaceId}/quota`, {

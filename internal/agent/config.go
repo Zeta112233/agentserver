@@ -10,9 +10,9 @@ import (
 // Config holds the local agent's persistent configuration.
 type Config struct {
 	Server      string `json:"server"`
-	SandboxID   string `json:"sandboxId"`
-	TunnelToken string `json:"tunnelToken"`
-	WorkspaceID string `json:"workspaceId"`
+	SandboxID   string `json:"sandbox_id"`
+	TunnelToken string `json:"tunnel_token"`
+	WorkspaceID string `json:"workspace_id"`
 	Name        string `json:"name"`
 }
 
