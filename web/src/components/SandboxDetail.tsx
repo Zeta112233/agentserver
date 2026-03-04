@@ -383,7 +383,7 @@ export function TracesTab({ traces, tracesTotal, tracesPage, totalPages, onPageC
   }
 
   return (
-    <div className="max-w-5xl">
+    <div>
       <div className="rounded-lg border border-[var(--border)] bg-[var(--card)] overflow-hidden">
         <table className="w-full text-xs">
           <thead>
@@ -391,7 +391,6 @@ export function TracesTab({ traces, tracesTotal, tracesPage, totalPages, onPageC
               <th className="w-8 py-2.5 px-2" />
               <th className="text-left py-2.5 px-4 font-medium text-[var(--muted-foreground)]">Session</th>
               <th className="text-left py-2.5 px-4 font-medium text-[var(--muted-foreground)]">Source</th>
-              <th className="text-left py-2.5 px-4 font-medium text-[var(--muted-foreground)]">Model</th>
               <th className="text-right py-2.5 px-4 font-medium text-[var(--muted-foreground)]">Req</th>
               <th className="text-right py-2.5 px-4 font-medium text-[var(--muted-foreground)]">Input</th>
               <th className="text-right py-2.5 px-4 font-medium text-[var(--muted-foreground)]">Output</th>
@@ -413,7 +412,6 @@ export function TracesTab({ traces, tracesTotal, tracesPage, totalPages, onPageC
                     </td>
                     <td className="py-2.5 px-4 text-[var(--muted-foreground)] font-mono truncate max-w-[120px]" title={t.id}>{t.id.slice(0, 12)}</td>
                     <td className="py-2.5 px-4 text-[var(--foreground)] font-mono truncate max-w-[140px]">{t.source || '-'}</td>
-                    <td className="py-2.5 px-4 text-[var(--muted-foreground)] font-mono truncate max-w-[160px]" title={t.models}>{t.models || '-'}</td>
                     <td className="py-2.5 px-4 text-right text-[var(--muted-foreground)]">{t.request_count}</td>
                     <td className="py-2.5 px-4 text-right text-[var(--muted-foreground)]">{formatTokens(t.total_input_tokens)}</td>
                     <td className="py-2.5 px-4 text-right text-[var(--muted-foreground)]">{formatTokens(t.total_output_tokens)}</td>
@@ -423,7 +421,7 @@ export function TracesTab({ traces, tracesTotal, tracesPage, totalPages, onPageC
                   </tr>
                   {isExpanded && (
                     <tr key={`${t.id}-detail`} className="border-b border-[var(--border)] last:border-0">
-                      <td colSpan={10} className="p-0">
+                      <td colSpan={9} className="p-0">
                         {isLoading ? (
                           <div className="py-4 text-center text-xs text-[var(--muted-foreground)]">Loading requests...</div>
                         ) : requests && requests.length > 0 ? (
