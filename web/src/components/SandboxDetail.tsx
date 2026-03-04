@@ -410,7 +410,7 @@ export function TracesTab({ traces, tracesTotal, tracesPage, totalPages, onPageC
                     <td className="py-2.5 px-2 text-center text-[var(--muted-foreground)]">
                       <ChevronRight size={14} className={`inline-block transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
                     </td>
-                    <td className="py-2.5 px-4 text-[var(--muted-foreground)] font-mono truncate max-w-[120px]" title={t.id}>{t.id.slice(0, 12)}</td>
+                    <td className="py-2.5 px-4 text-[var(--muted-foreground)] font-mono truncate max-w-[200px]" title={t.id}>{t.id}</td>
                     <td className="py-2.5 px-4 text-[var(--foreground)] font-mono truncate max-w-[140px]">{t.source || '-'}</td>
                     <td className="py-2.5 px-4 text-right text-[var(--muted-foreground)]">{t.request_count}</td>
                     <td className="py-2.5 px-4 text-right text-[var(--muted-foreground)]">{formatTokens(t.total_input_tokens)}</td>
@@ -443,7 +443,7 @@ export function TracesTab({ traces, tracesTotal, tracesPage, totalPages, onPageC
                             <tbody>
                               {requests.map((req) => (
                                 <tr key={req.id} className="border-b border-[var(--border)] last:border-0">
-                                  <td className="py-2 px-4 pl-10 text-[var(--muted-foreground)] font-mono truncate max-w-[120px]" title={req.message_id || ''}>{req.message_id ? req.message_id.slice(0, 12) : '-'}</td>
+                                  <td className="py-2 px-4 pl-10 text-[var(--muted-foreground)] font-mono truncate max-w-[200px]" title={req.message_id || ''}>{req.message_id || '-'}</td>
                                   <td className="py-2 px-4 text-[var(--foreground)] font-mono truncate max-w-[160px]">{req.model}</td>
                                   <td className="py-2 px-4 text-right text-[var(--muted-foreground)]">{formatTokens(req.input_tokens)}</td>
                                   <td className="py-2 px-4 text-right text-[var(--muted-foreground)]">{formatTokens(req.output_tokens)}</td>
