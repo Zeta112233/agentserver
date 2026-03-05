@@ -125,7 +125,7 @@ func (s *Server) handleSubdomainProxy(w http.ResponseWriter, r *http.Request, sa
 
 	// Local agent: proxy via WebSocket tunnel.
 	if sbx.IsLocal {
-		tunnel, ok := s.TunnelRegistry.Get(sandboxID)
+		tunnel, ok := s.TunnelRegistry.Get(sbx.ID)
 		if !ok {
 			writeErrorPage(w, errPageAgentOffline)
 			return

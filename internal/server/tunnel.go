@@ -85,13 +85,14 @@ func (s *Server) handleTunnel(w http.ResponseWriter, r *http.Request) {
 	case <-t.Done():
 	}
 
-	// Cleanup.
-	s.TunnelRegistry.Unregister(sandboxID, t)
+	// Cleanup: only set offline if this tunnel is still the active one.
+	wasActive := s.TunnelRegistry.Unregister(sandboxID, t)
 	t.Close()
 
-	// Set status to offline.
-	s.Sandboxes.UpdateStatus(sandboxID, sbxstore.StatusOffline)
-	log.Printf("tunnel disconnected: sandbox %s", sandboxID)
+	if wasActive {
+		s.Sandboxes.UpdateStatus(sandboxID, sbxstore.StatusOffline)
+	}
+	log.Printf("tunnel disconnected: sandbox %s (was_active=%v)", sandboxID, wasActive)
 }
 
 // proxyViaTunnel forwards an HTTP request through a WebSocket tunnel to the local agent.

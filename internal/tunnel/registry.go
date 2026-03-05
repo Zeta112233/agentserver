@@ -39,12 +39,15 @@ func (r *Registry) Register(sandboxID string, conn *websocket.Conn) *Tunnel {
 }
 
 // Unregister removes the tunnel for the given sandbox (only if it matches the provided tunnel).
-func (r *Registry) Unregister(sandboxID string, t *Tunnel) {
+// Returns true if the tunnel was actually removed (i.e. it was still the active one).
+func (r *Registry) Unregister(sandboxID string, t *Tunnel) bool {
 	r.mu.Lock()
+	defer r.mu.Unlock()
 	if existing, ok := r.tunnels[sandboxID]; ok && existing == t {
 		delete(r.tunnels, sandboxID)
+		return true
 	}
-	r.mu.Unlock()
+	return false
 }
 
 // Get returns the active tunnel for a sandbox, if any.
