@@ -118,6 +118,8 @@ llmproxy:
     # Database name created on the shared PostgreSQL instance.
     name: llmproxy
   externalDatabaseUrl: ""
+  # Default max requests per day per workspace (0 = unlimited).
+  defaultMaxRpd: 0
 
 service:
   type: ClusterIP

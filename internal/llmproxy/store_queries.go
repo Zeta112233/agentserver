@@ -233,3 +233,57 @@ func nullIfEmpty(s string) interface{} {
 	}
 	return s
 }
+
+// GetWorkspaceQuota returns the quota override for a workspace, or nil if none exists.
+func (s *Store) GetWorkspaceQuota(workspaceID string) (*WorkspaceQuota, error) {
+	q := &WorkspaceQuota{}
+	err := s.db.QueryRow(
+		`SELECT workspace_id, max_rpd, updated_at FROM workspace_quotas WHERE workspace_id = $1`,
+		workspaceID,
+	).Scan(&q.WorkspaceID, &q.MaxRPD, &q.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get workspace quota: %w", err)
+	}
+	return q, nil
+}
+
+// SetWorkspaceQuota upserts the quota override for a workspace.
+func (s *Store) SetWorkspaceQuota(workspaceID string, maxRPD *int) error {
+	_, err := s.db.Exec(
+		`INSERT INTO workspace_quotas (workspace_id, max_rpd, updated_at)
+		 VALUES ($1, $2, NOW())
+		 ON CONFLICT (workspace_id) DO UPDATE SET
+		   max_rpd = EXCLUDED.max_rpd,
+		   updated_at = NOW()`,
+		workspaceID, maxRPD,
+	)
+	if err != nil {
+		return fmt.Errorf("set workspace quota: %w", err)
+	}
+	return nil
+}
+
+// DeleteWorkspaceQuota removes the quota override for a workspace.
+func (s *Store) DeleteWorkspaceQuota(workspaceID string) error {
+	_, err := s.db.Exec(`DELETE FROM workspace_quotas WHERE workspace_id = $1`, workspaceID)
+	if err != nil {
+		return fmt.Errorf("delete workspace quota: %w", err)
+	}
+	return nil
+}
+
+// CountTodayRequests returns the number of LLM API requests for a workspace since the start of today (UTC).
+func (s *Store) CountTodayRequests(workspaceID string) (int64, error) {
+	var count int64
+	err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM usage WHERE workspace_id = $1 AND created_at >= date_trunc('day', NOW())`,
+		workspaceID,
+	).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count today requests: %w", err)
+	}
+	return count, nil
+}

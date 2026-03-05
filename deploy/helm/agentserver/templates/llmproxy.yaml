@@ -68,6 +68,8 @@ spec:
                 secretKeyRef:
                   name: {{ .Release.Name }}-secret
                   key: anthropic-auth-token
+            - name: LLMPROXY_DEFAULT_MAX_RPD
+              value: {{ .Values.llmproxy.defaultMaxRpd | default 0 | quote }}
           livenessProbe:
             httpGet:
               path: /healthz

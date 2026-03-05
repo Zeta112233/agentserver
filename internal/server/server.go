@@ -1218,7 +1218,7 @@ func (s *Server) handleSandboxUsage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "llmproxy not configured", http.StatusServiceUnavailable)
 		return
 	}
-	proxyURL := s.LLMProxyURL + "/api/usage?sandbox_id=" + id
+	proxyURL := s.LLMProxyURL + "/internal/usage?sandbox_id=" + id
 	s.proxyLLMRequest(w, proxyURL)
 }
 
@@ -1236,7 +1236,7 @@ func (s *Server) handleSandboxTraces(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "llmproxy not configured", http.StatusServiceUnavailable)
 		return
 	}
-	proxyURL := s.LLMProxyURL + "/api/traces?sandbox_id=" + id
+	proxyURL := s.LLMProxyURL + "/internal/traces?sandbox_id=" + id
 	if limit := r.URL.Query().Get("limit"); limit != "" {
 		proxyURL += "&limit=" + limit
 	}
@@ -1261,7 +1261,7 @@ func (s *Server) handleTraceDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	traceId := chi.URLParam(r, "traceId")
-	proxyURL := s.LLMProxyURL + "/api/traces/" + traceId
+	proxyURL := s.LLMProxyURL + "/internal/traces/" + traceId
 	s.proxyLLMRequest(w, proxyURL)
 }
 
@@ -1274,7 +1274,7 @@ func (s *Server) handleWorkspaceTraces(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "llmproxy not configured", http.StatusServiceUnavailable)
 		return
 	}
-	proxyURL := s.LLMProxyURL + "/api/traces?workspace_id=" + wid
+	proxyURL := s.LLMProxyURL + "/internal/traces?workspace_id=" + wid
 	if limit := r.URL.Query().Get("limit"); limit != "" {
 		proxyURL += "&limit=" + limit
 	}
@@ -1294,7 +1294,7 @@ func (s *Server) handleWorkspaceTraceDetail(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	traceId := chi.URLParam(r, "traceId")
-	proxyURL := s.LLMProxyURL + "/api/traces/" + traceId
+	proxyURL := s.LLMProxyURL + "/internal/traces/" + traceId
 	s.proxyLLMRequest(w, proxyURL)
 }
 
