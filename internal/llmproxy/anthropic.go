@@ -3,6 +3,7 @@ package llmproxy
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -38,6 +39,23 @@ func (s *Server) handleAnthropicProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 1b. Check RPD quota (only for messages endpoint).
+	isMessagesEndpoint := strings.HasSuffix(r.URL.Path, "/messages")
+	if isMessagesEndpoint {
+		if exceeded, current, max := s.checkRPD(sbx.WorkspaceID); exceeded {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusTooManyRequests)
+			json.NewEncoder(w).Encode(anthropic.ErrorResponse{
+				Type: "error",
+				Error: anthropic.ErrorObjectUnion{
+					Type:    "rate_limit_error",
+					Message: fmt.Sprintf("workspace requests per day quota exceeded (%d/%d)", current, max),
+				},
+			})
+			return
+		}
+	}
+
 	// 2. Read body for trace extraction and stream detection.
 	bodyBytes, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 10<<20))
 	if err != nil {
@@ -45,9 +63,6 @@ func (s *Server) handleAnthropicProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
-
-	// Determine if this is a messages endpoint (where we track usage).
-	isMessagesEndpoint := strings.HasSuffix(r.URL.Path, "/messages")
 
 	// Detect streaming from request body.
 	var reqShape struct {
@@ -203,4 +218,35 @@ func (s *Server) recordUsage(sbx *SandboxInfo, traceID, requestID, model, msgID 
 	if err := s.store.UpdateTraceActivity(traceID); err != nil {
 		logger.Error("failed to update trace activity", "error", err)
 	}
+}
+
+// checkRPD resolves the effective max RPD for a workspace and checks if it's exceeded.
+// Returns (exceeded, current, max). If max is 0, RPD is unlimited.
+func (s *Server) checkRPD(workspaceID string) (bool, int64, int64) {
+	maxRPD := s.config.DefaultMaxRPD
+
+	if s.store != nil {
+		if wq, err := s.store.GetWorkspaceQuota(workspaceID); err == nil && wq != nil && wq.MaxRPD != nil {
+			maxRPD = *wq.MaxRPD
+		}
+	}
+
+	if maxRPD <= 0 {
+		return false, 0, 0
+	}
+
+	if s.store == nil {
+		return false, 0, int64(maxRPD)
+	}
+
+	count, err := s.store.CountTodayRequests(workspaceID)
+	if err != nil {
+		s.logger.Error("failed to count today requests for RPD check", "error", err, "workspace_id", workspaceID)
+		return false, 0, int64(maxRPD)
+	}
+
+	if count >= int64(maxRPD) {
+		return true, count, int64(maxRPD)
+	}
+	return false, count, int64(maxRPD)
 }

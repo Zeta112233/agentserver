@@ -45,12 +45,15 @@ func (s *Server) Routes() http.Handler {
 	// Anthropic API proxy (all /v1/* paths).
 	r.HandleFunc("/v1/*", s.handleAnthropicProxy)
 
-	// Query API (requires database).
-	r.Route("/api", func(r chi.Router) {
+	// Internal API (requires database, network-isolated — only agentserver can reach these).
+	r.Route("/internal", func(r chi.Router) {
 		r.Use(s.requireStore)
 		r.Get("/usage", s.handleQueryUsage)
 		r.Get("/traces", s.handleQueryTraces)
 		r.Get("/traces/{id}", s.handleGetTrace)
+		r.Get("/quotas/{workspace_id}", s.handleGetWorkspaceQuota)
+		r.Put("/quotas/{workspace_id}", s.handleSetWorkspaceQuota)
+		r.Delete("/quotas/{workspace_id}", s.handleDeleteWorkspaceQuota)
 	})
 
 	return r
@@ -127,6 +130,63 @@ func (s *Server) handleGetTrace(w http.ResponseWriter, r *http.Request) {
 		"trace":    trace,
 		"requests": requests,
 	})
+}
+
+// handleGetWorkspaceQuota returns the quota override and config default for a workspace.
+func (s *Server) handleGetWorkspaceQuota(w http.ResponseWriter, r *http.Request) {
+	workspaceID := chi.URLParam(r, "workspace_id")
+
+	wq, err := s.store.GetWorkspaceQuota(workspaceID)
+	if err != nil {
+		s.logger.Error("get workspace quota failed", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"quota":           wq,
+		"default_max_rpd": s.config.DefaultMaxRPD,
+	})
+}
+
+// handleSetWorkspaceQuota sets the quota override for a workspace.
+func (s *Server) handleSetWorkspaceQuota(w http.ResponseWriter, r *http.Request) {
+	workspaceID := chi.URLParam(r, "workspace_id")
+
+	var req struct {
+		MaxRPD *int `json:"max_rpd"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+
+	if req.MaxRPD != nil && *req.MaxRPD < 0 {
+		http.Error(w, "max_rpd must be >= 0", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.store.SetWorkspaceQuota(workspaceID, req.MaxRPD); err != nil {
+		s.logger.Error("set workspace quota failed", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleDeleteWorkspaceQuota removes the quota override for a workspace.
+func (s *Server) handleDeleteWorkspaceQuota(w http.ResponseWriter, r *http.Request) {
+	workspaceID := chi.URLParam(r, "workspace_id")
+
+	if err := s.store.DeleteWorkspaceQuota(workspaceID); err != nil {
+		s.logger.Error("delete workspace quota failed", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func parseQueryOpts(r *http.Request) QueryOpts {

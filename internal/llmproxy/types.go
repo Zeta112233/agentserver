@@ -68,3 +68,10 @@ type QueryOpts struct {
 	Limit       int
 	Offset      int
 }
+
+// WorkspaceQuota holds per-workspace quota overrides stored in the llmproxy DB.
+type WorkspaceQuota struct {
+	WorkspaceID string    `json:"workspace_id"`
+	MaxRPD      *int      `json:"max_rpd"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}

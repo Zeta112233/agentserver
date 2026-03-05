@@ -1,6 +1,9 @@
 package llmproxy
 
-import "os"
+import (
+	"os"
+	"strconv"
+)
 
 // Config holds all configuration for the LLM proxy.
 type Config struct {
@@ -11,6 +14,7 @@ type Config struct {
 	AnthropicAPIKey    string // real Anthropic API key
 	AnthropicAuthToken string // alternative: Bearer token auth
 	TraceHeader        string // custom trace header name
+	DefaultMaxRPD      int    // default max requests per day per workspace (0 = unlimited)
 }
 
 // LoadConfigFromEnv reads configuration from environment variables.
@@ -23,6 +27,11 @@ func LoadConfigFromEnv() Config {
 		AnthropicAPIKey:    os.Getenv("ANTHROPIC_API_KEY"),
 		AnthropicAuthToken: os.Getenv("ANTHROPIC_AUTH_TOKEN"),
 		TraceHeader:        envOr("LLMPROXY_TRACE_HEADER", "X-Trace-Id"),
+	}
+	if v := os.Getenv("LLMPROXY_DEFAULT_MAX_RPD"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			cfg.DefaultMaxRPD = n
+		}
 	}
 	return cfg
 }
