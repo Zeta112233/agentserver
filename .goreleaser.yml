@@ -1,3 +1,5 @@
+version: 2
+
 project_name: agentserver
 
 builds:
@@ -18,13 +20,15 @@ builds:
 
 archives:
   - id: agentserver-agent
-    builds:
+    ids:
       - agentserver-agent
-    format: tar.gz
+    formats:
+      - tar.gz
     name_template: "agentserver-{{ .Os }}-{{ .Arch }}"
     format_overrides:
       - goos: windows
-        format: zip
+        formats:
+          - zip
 
 checksum:
   name_template: "checksums.txt"
@@ -65,15 +69,12 @@ release:
     helm install agentserver oci://ghcr.io/agentserver/charts/agentserver --version {{ trimprefix .Tag "v" }}
     ```
 
-brews:
+homebrew_casks:
   - name: agentserver
     repository:
       owner: agentserver
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
-    directory: Formula
+    directory: Casks
     homepage: "https://github.com/agentserver/agentserver"
     description: "Connect local opencode to agentserver via WebSocket tunnel"
-    license: "MIT"
-    test: |
-      system "#{bin}/agentserver", "--help"
