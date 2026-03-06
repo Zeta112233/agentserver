@@ -9,7 +9,7 @@ builds:
     env:
       - CGO_ENABLED=0
     ldflags:
-      - -s -w
+      - -s -w -X github.com/agentserver/agentserver/internal/agent.Version={{.Version}}
     goos:
       - linux
       - darwin
@@ -31,7 +31,7 @@ notarize:
         key_id: "{{.Env.MACOS_NOTARY_KEY_ID}}"
         key: "{{.Env.MACOS_NOTARY_KEY}}"
         wait: true
-        timeout: 30m
+        timeout: 1h
 
 archives:
   - id: agentserver-agent
