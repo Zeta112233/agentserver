@@ -207,18 +207,18 @@ jobs:
 
           CONTENT=$(base64 -w 0 /tmp/agentserver.rb)
 
-          # Delete old Cask if it exists
-          OLD_CASK_SHA=$(gh api repos/agentserver/homebrew-tap/contents/Casks/agentserver.rb --jq '.sha' 2>/dev/null || echo "")
-          if [ -n "$OLD_CASK_SHA" ]; then
+          # Delete old Cask if it exists (best-effort, ignore errors)
+          OLD_CASK_SHA=$(gh api repos/agentserver/homebrew-tap/contents/Casks/agentserver.rb --jq '.sha' 2>/dev/null || true)
+          if [ -n "$OLD_CASK_SHA" ] && [ "$OLD_CASK_SHA" != "null" ]; then
             gh api -X DELETE repos/agentserver/homebrew-tap/contents/Casks/agentserver.rb \
               -f message="chore: remove old agentserver cask in favor of formula" \
-              -f sha="$OLD_CASK_SHA"
+              -f sha="$OLD_CASK_SHA" || true
           fi
 
           # Create or update the Formula
-          EXISTING_SHA=$(gh api repos/agentserver/homebrew-tap/contents/Formula/agentserver.rb --jq '.sha' 2>/dev/null || echo "")
+          EXISTING_SHA=$(gh api repos/agentserver/homebrew-tap/contents/Formula/agentserver.rb --jq '.sha' 2>/dev/null || true)
 
-          if [ -n "$EXISTING_SHA" ]; then
+          if [ -n "$EXISTING_SHA" ] && [ "$EXISTING_SHA" != "null" ]; then
             gh api -X PUT repos/agentserver/homebrew-tap/contents/Formula/agentserver.rb \
               -f message="chore: update agentserver formula to ${VERSION}" \
               -f content="$CONTENT" \
