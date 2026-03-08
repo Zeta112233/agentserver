@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log"
 	"sync"
-	"time"
 
 	"nhooyr.io/websocket"
 )
@@ -148,9 +147,7 @@ func (t *Tunnel) CleanupRequest(requestID string) {
 func (t *Tunnel) readLoop() {
 	defer t.Close()
 	for {
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-		msgType, data, err := t.Conn.Read(ctx)
-		cancel()
+		msgType, data, err := t.Conn.Read(context.Background())
 		if err != nil {
 			select {
 			case <-t.done:
