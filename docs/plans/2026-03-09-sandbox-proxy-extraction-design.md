@@ -48,7 +48,6 @@ internal/sandboxproxy/
     openclaw_proxy.go              — moved from server/openclaw_proxy.go
     tunnel.go                      — moved from server/tunnel.go
     error_page.go                  — moved from server/error_page.go
-    activity.go                    — throttledActivity helper
 ```
 
 ## Shared Packages (read-only reuse)
@@ -56,7 +55,7 @@ internal/sandboxproxy/
 | Package | Usage |
 |---------|-------|
 | `internal/db` | Query sandbox info, validate tunnel token, update heartbeat/activity |
-| `internal/auth` | Validate user cookie tokens (shared JWT secret) |
+| `internal/auth` | Validate user cookie tokens (DB-backed token lookup) |
 | `internal/sbxstore` | In-memory sandbox store (Resolve by ID/shortID) |
 | `internal/tunnel` | Registry + Protocol (unchanged) |
 | `internal/shortid` | Short ID parsing |
@@ -85,7 +84,6 @@ type Server struct {
 | Variable | Description |
 |----------|-------------|
 | `DATABASE_URL` | PostgreSQL connection string |
-| `AUTH_JWT_SECRET` | Shared JWT secret with agentserver |
 | `BASE_DOMAIN` | Base domain for subdomain routing |
 | `OPENCODE_ASSET_DOMAIN` | Shared static asset domain |
 | `OPENCODE_SUBDOMAIN_PREFIX` | Subdomain prefix for opencode (default: "code") |

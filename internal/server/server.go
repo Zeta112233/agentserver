@@ -676,6 +676,8 @@ func (s *Server) handleDeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 	sandboxes := s.Sandboxes.ListByWorkspace(id)
 	for _, sbx := range sandboxes {
 		if sbx.IsLocal {
+			// TODO: tunnel close is now a no-op here; sandbox-proxy owns tunnel connections.
+			// Tunnel will terminate when the agent's next heartbeat finds the sandbox deleted.
 			if t, ok := s.TunnelRegistry.Get(sbx.ID); ok {
 				t.Close()
 			}
@@ -1137,7 +1139,8 @@ func (s *Server) handleDeleteSandbox(w http.ResponseWriter, r *http.Request) {
 
 	// Handle based on sandbox status.
 	if sbx.IsLocal {
-		// For local sandboxes, close the tunnel if active.
+		// TODO: tunnel close is now a no-op here; sandbox-proxy owns tunnel connections.
+		// Tunnel will terminate when the agent's next heartbeat finds the sandbox deleted.
 		if t, ok := s.TunnelRegistry.Get(id); ok {
 			t.Close()
 		}
