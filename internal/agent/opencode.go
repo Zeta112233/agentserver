@@ -19,10 +19,13 @@ type OpencodeProcess struct {
 
 // StartOpencode starts "opencode serve --hostname 127.0.0.1 --port {port}" as a child process.
 // It returns immediately after starting the process.
-func StartOpencode(bin string, port int) (*OpencodeProcess, error) {
+func StartOpencode(bin string, port int, password string) (*OpencodeProcess, error) {
 	cmd := exec.Command(bin, "serve", "--hostname", "127.0.0.1", "--port", strconv.Itoa(port))
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	if password != "" {
+		cmd.Env = append(os.Environ(), "OPENCODE_SERVER_PASSWORD="+password)
+	}
 
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start opencode: %w", err)

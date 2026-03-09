@@ -89,7 +89,7 @@ func RunConnect(opts ConnectOptions) {
 			log.Printf("opencode already running on port %d, skipping auto-start", opts.OpencodePort)
 		} else {
 			log.Printf("Starting opencode on port %d...", opts.OpencodePort)
-			opencodeProc, err = StartOpencode(opts.OpencodeBin, opts.OpencodePort)
+			opencodeProc, err = StartOpencode(opts.OpencodeBin, opts.OpencodePort, opts.OpencodeToken)
 			if err != nil {
 				log.Fatalf("Failed to start opencode: %v", err)
 			}
