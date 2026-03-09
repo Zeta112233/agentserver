@@ -30,8 +30,34 @@ archives:
         formats:
           - zip
 
+notarize:
+  macos:
+    - enabled: '{{ isEnvSet "MACOS_SIGN_P12" }}'
+      ids:
+        - agentserver-agent
+      sign:
+        certificate: "{{.Env.MACOS_SIGN_P12}}"
+        password: "{{.Env.MACOS_SIGN_PASSWORD}}"
+      notarize:
+        issuer_id: "{{.Env.MACOS_NOTARY_ISSUER_ID}}"
+        key_id: "{{.Env.MACOS_NOTARY_KEY_ID}}"
+        key: "{{.Env.MACOS_NOTARY_KEY}}"
+        wait: true
+        timeout: 20m
+
 checksum:
   name_template: "checksums.txt"
+
+homebrew_casks:
+  - name: agentserver
+    ids:
+      - agentserver-agent
+    description: "Connect local opencode to agentserver via WebSocket tunnel"
+    homepage: "https://github.com/agentserver/agentserver"
+    repository:
+      owner: agentserver
+      name: homebrew-tap
+      token: "{{.Env.HOMEBREW_TAP_TOKEN}}"
 
 changelog:
   sort: asc
