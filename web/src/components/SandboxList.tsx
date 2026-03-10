@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
-import { Plus, Trash2, Pause, Play, Loader2, Laptop, Box } from 'lucide-react'
+import { Plus, Trash2, Pause, Play, Loader2, Laptop, Box, Download, ExternalLink } from 'lucide-react'
 import {
   type Sandbox,
   createSandbox,
@@ -304,29 +304,104 @@ export function SandboxList({
       {agentCodeData && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setAgentCodeData(null)}>
           <div
-            className="w-full max-w-lg rounded-lg border border-[var(--border)] bg-[var(--card)] p-6 shadow-xl"
+            className="w-full max-w-xl rounded-lg border border-[var(--border)] bg-[var(--card)] p-6 shadow-xl"
             onClick={(e) => e.stopPropagation()}
           >
-            <h2 className="text-lg font-semibold text-[var(--foreground)] mb-4">Connect Local Agent</h2>
-            <div className="flex flex-col gap-3 text-sm">
-              <p className="text-[var(--muted-foreground)]">
-                Run the following command on your local machine to connect your opencode instance:
-              </p>
-              <div className="relative rounded-md bg-[var(--secondary)] p-3">
-                <code className="block whitespace-pre-wrap break-all text-xs text-[var(--foreground)]">
-                  {agentCodeData.command}
-                </code>
-                <button
-                  onClick={() => navigator.clipboard.writeText(agentCodeData.command)}
-                  className="absolute right-2 top-2 rounded px-2 py-1 text-xs text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
-                >
-                  Copy
-                </button>
+            <h2 className="text-lg font-semibold text-[var(--foreground)] mb-5">Connect Local Agent</h2>
+
+            <div className="flex flex-col">
+              {/* Step 1 */}
+              <div className="flex gap-3">
+                <div className="flex flex-col items-center">
+                  <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--secondary)] text-xs font-semibold text-[var(--foreground)]">
+                    1
+                  </div>
+                  <div className="mt-1 w-px flex-1 bg-[var(--border)]" />
+                </div>
+                <div className="pb-5">
+                  <p className="text-sm font-semibold text-[var(--foreground)]">Prerequisites</p>
+                  <div className="mt-1.5 flex flex-col gap-1.5 text-sm text-[var(--muted-foreground)]">
+                    <p className="flex items-start gap-1.5">
+                      <Download size={14} className="mt-0.5 shrink-0" />
+                      <span>
+                        <span className="font-medium text-[var(--foreground)]">Install agentserver CLI</span>
+                        <br />
+                        macOS / Linux: <code className="rounded bg-[var(--secondary)] px-1.5 py-0.5 text-xs text-[var(--foreground)]">brew install opencode-ai/tap/agentserver</code>
+                        <br />
+                        Windows / Other:{' '}
+                        <a
+                          href="https://github.com/opencode-ai/agentserver/releases"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-0.5 text-[var(--foreground)] underline underline-offset-2 hover:opacity-80"
+                        >
+                          GitHub Releases <ExternalLink size={11} className="inline" />
+                        </a>
+                      </span>
+                    </p>
+                    <p className="flex items-start gap-1.5">
+                      <Download size={14} className="mt-0.5 shrink-0" />
+                      <span>
+                        <span className="font-medium text-[var(--foreground)]">Install opencode</span>
+                        <br />
+                        Follow the installation guide at{' '}
+                        <a
+                          href="https://opencode.ai"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-0.5 text-[var(--foreground)] underline underline-offset-2 hover:opacity-80"
+                        >
+                          opencode.ai <ExternalLink size={11} className="inline" />
+                        </a>
+                      </span>
+                    </p>
+                  </div>
+                </div>
               </div>
-              <p className="text-xs text-[var(--muted-foreground)]">
-                Code expires at {new Date(agentCodeData.expires_at).toLocaleString()}. It can only be used once.
-              </p>
+
+              {/* Step 2 */}
+              <div className="flex gap-3">
+                <div className="flex flex-col items-center">
+                  <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--secondary)] text-xs font-semibold text-[var(--foreground)]">
+                    2
+                  </div>
+                  <div className="mt-1 w-px flex-1 bg-[var(--border)]" />
+                </div>
+                <div className="pb-5">
+                  <p className="text-sm font-semibold text-[var(--foreground)]">Run Command</p>
+                  <p className="mt-1.5 text-sm text-[var(--muted-foreground)]">
+                    Run this on your local machine to connect:
+                  </p>
+                  <div className="relative mt-2 rounded-md bg-[var(--secondary)] p-3">
+                    <code className="block whitespace-pre-wrap break-all text-xs text-[var(--foreground)]">
+                      {agentCodeData.command}
+                    </code>
+                    <button
+                      onClick={() => navigator.clipboard.writeText(agentCodeData.command)}
+                      className="absolute right-2 top-2 rounded px-2 py-1 text-xs text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
+                    >
+                      Copy
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Step 3 */}
+              <div className="flex gap-3">
+                <div className="flex flex-col items-center">
+                  <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--secondary)] text-xs font-semibold text-[var(--foreground)]">
+                    3
+                  </div>
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-[var(--foreground)]">Done</p>
+                  <p className="mt-1.5 text-xs text-[var(--muted-foreground)]">
+                    Code expires at {new Date(agentCodeData.expires_at).toLocaleString()}. It can only be used once.
+                  </p>
+                </div>
+              </div>
             </div>
+
             <div className="flex justify-end mt-5">
               <button
                 onClick={() => setAgentCodeData(null)}
