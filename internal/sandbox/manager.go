@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"hash/fnv"
@@ -18,8 +19,10 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/client-go/tools/remotecommand"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	sandboxv1alpha1 "sigs.k8s.io/agent-sandbox/api/v1alpha1"
@@ -810,6 +813,56 @@ func (m *Manager) StopBySandboxName(namespace, sandboxName string) error {
 		},
 	}
 	return m.k8s.Delete(ctx, sb)
+}
+
+// ExecSimple runs a command in a sandbox pod and returns its stdout.
+// It is a one-shot exec (no stdin/TTY) intended for short-lived commands
+// like writing config files or restarting a gateway.
+func (m *Manager) ExecSimple(ctx context.Context, sandboxID string, command []string) (string, error) {
+	// Resolve pod namespace and name.
+	ns, err := m.lookupNamespace(sandboxID)
+	if err != nil {
+		return "", err
+	}
+	sandboxName := "agent-sandbox-" + shortID(sandboxID)
+	podName, _, err := m.waitForReady(ctx, ns, sandboxName)
+	if err != nil {
+		return "", fmt.Errorf("pod not ready: %w", err)
+	}
+
+	req := m.clientset.CoreV1().RESTClient().Post().
+		Resource("pods").
+		Name(podName).
+		Namespace(ns).
+		SubResource("exec").
+		VersionedParams(&corev1.PodExecOptions{
+			Container: sandboxContainerName,
+			Command:   command,
+			Stdout:    true,
+			Stderr:    true,
+		}, scheme.ParameterCodec)
+
+	wsExec, err := remotecommand.NewWebSocketExecutor(m.restCfg, "POST", req.URL().String())
+	if err != nil {
+		return "", err
+	}
+	spdyExec, err := remotecommand.NewSPDYExecutor(m.restCfg, "POST", req.URL())
+	if err != nil {
+		return "", err
+	}
+	executor, err := remotecommand.NewFallbackExecutor(wsExec, spdyExec, func(error) bool { return true })
+	if err != nil {
+		return "", err
+	}
+
+	var stdout, stderr bytes.Buffer
+	if err := executor.StreamWithContext(ctx, remotecommand.StreamOptions{
+		Stdout: &stdout,
+		Stderr: &stderr,
+	}); err != nil {
+		return "", fmt.Errorf("exec: %w (stderr: %s)", err, stderr.String())
+	}
+	return stdout.String(), nil
 }
 
 func (m *Manager) Close() error {

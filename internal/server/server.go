@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -24,6 +25,7 @@ import (
 	"github.com/agentserver/agentserver/internal/shortid"
 	"github.com/agentserver/agentserver/internal/storage"
 	"github.com/agentserver/agentserver/internal/tunnel"
+	"github.com/agentserver/agentserver/internal/weixin"
 )
 
 type Server struct {
@@ -182,6 +184,10 @@ func (s *Server) Router() http.Handler {
 		r.Get("/api/sandboxes/{id}/traces/{traceId}", s.handleTraceDetail)
 		r.Get("/api/workspaces/{wid}/traces", s.handleWorkspaceTraces)
 		r.Get("/api/workspaces/{wid}/traces/{traceId}", s.handleWorkspaceTraceDetail)
+
+		// WeChat channel QR login
+		r.Post("/api/sandboxes/{id}/weixin/qr-start", s.handleWeixinQRStart)
+		r.Post("/api/sandboxes/{id}/weixin/qr-wait", s.handleWeixinQRWait)
 
 		// Agent registration code generation
 		r.Post("/api/workspaces/{wid}/agent-code", s.handleCreateAgentCode)
@@ -1411,4 +1417,194 @@ func generatePassword() string {
 		return uuid.New().String()
 	}
 	return hex.EncodeToString(b)
+}
+
+// ---------------------------------------------------------------------------
+// WeChat channel QR login
+// ---------------------------------------------------------------------------
+
+func (s *Server) handleWeixinQRStart(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	sbx, ok := s.Sandboxes.Get(id)
+	if !ok {
+		http.Error(w, "sandbox not found", http.StatusNotFound)
+		return
+	}
+	if _, ok := s.requireWorkspaceMember(w, r, sbx.WorkspaceID); !ok {
+		return
+	}
+	if sbx.Type != "openclaw" {
+		http.Error(w, "weixin login is only available for openclaw sandboxes", http.StatusBadRequest)
+		return
+	}
+	if sbx.Status != "running" {
+		http.Error(w, "sandbox is not running", http.StatusConflict)
+		return
+	}
+
+	session, err := weixin.StartLogin(r.Context(), weixin.DefaultAPIBaseURL)
+	if err != nil {
+		log.Printf("weixin qr-start: %v", err)
+		http.Error(w, "failed to start weixin login", http.StatusBadGateway)
+		return
+	}
+	weixin.SetSession(id, session)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"qrcode_url": session.QRCodeURL,
+		"message":    "Scan the QR code with WeChat",
+	})
+}
+
+// execCommander is implemented by sandbox managers that support one-shot exec.
+type execCommander interface {
+	ExecSimple(ctx context.Context, sandboxID string, command []string) (string, error)
+}
+
+func (s *Server) handleWeixinQRWait(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	sbx, ok := s.Sandboxes.Get(id)
+	if !ok {
+		http.Error(w, "sandbox not found", http.StatusNotFound)
+		return
+	}
+	if _, ok := s.requireWorkspaceMember(w, r, sbx.WorkspaceID); !ok {
+		return
+	}
+	if sbx.Type != "openclaw" {
+		http.Error(w, "weixin login is only available for openclaw sandboxes", http.StatusBadRequest)
+		return
+	}
+	if sbx.Status != "running" {
+		http.Error(w, "sandbox is not running", http.StatusConflict)
+		return
+	}
+
+	session := weixin.GetSession(id)
+	if session == nil {
+		http.Error(w, "no active weixin login session", http.StatusBadRequest)
+		return
+	}
+
+	result, err := weixin.PollLoginStatus(r.Context(), weixin.DefaultAPIBaseURL, session.QRCode)
+	if err != nil {
+		log.Printf("weixin qr-wait: poll error: %v", err)
+		http.Error(w, "poll failed", http.StatusBadGateway)
+		return
+	}
+
+	switch result.Status {
+	case "confirmed":
+		weixin.TakeSession(id) // atomic get+delete to prevent duplicate saves
+		if err := s.saveWeixinCredentials(r.Context(), id, result); err != nil {
+			log.Printf("weixin qr-wait: save credentials: %v", err)
+			http.Error(w, "login succeeded but failed to save credentials", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"connected": true,
+			"status":    "confirmed",
+			"message":   "WeChat connected successfully",
+		})
+
+	case "expired":
+		// Auto-refresh QR code.
+		newSession, err := weixin.StartLogin(r.Context(), weixin.DefaultAPIBaseURL)
+		if err != nil {
+			weixin.ClearSession(id)
+			http.Error(w, "QR code expired and refresh failed", http.StatusBadGateway)
+			return
+		}
+		weixin.SetSession(id, newSession)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"connected":  false,
+			"status":     "expired",
+			"message":    "QR code expired, new code generated",
+			"qrcode_url": newSession.QRCodeURL,
+		})
+
+	default: // "wait", "scaned"
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"connected": false,
+			"status":    result.Status,
+			"message":   statusMessage(result.Status),
+		})
+	}
+}
+
+func statusMessage(status string) string {
+	switch status {
+	case "scaned":
+		return "QR code scanned, confirm on WeChat"
+	default:
+		return "Waiting for QR code scan"
+	}
+}
+
+func (s *Server) saveWeixinCredentials(ctx context.Context, sandboxID string, result *weixin.StatusResult) error {
+	commander, ok := s.ProcessManager.(execCommander)
+	if !ok {
+		return fmt.Errorf("process manager does not support exec")
+	}
+
+	accountID := normalizeAccountID(result.BotID)
+	if accountID == "" {
+		return fmt.Errorf("empty bot ID from ilink response")
+	}
+	baseURL := result.BaseURL
+	if baseURL == "" {
+		baseURL = weixin.DefaultAPIBaseURL
+	}
+
+	// Marshal credentials as JSON, then base64-encode to avoid any shell injection.
+	credJSON, err := json.Marshal(map[string]string{
+		"token":   result.Token,
+		"baseUrl": baseURL,
+		"savedAt": time.Now().UTC().Format(time.RFC3339),
+	})
+	if err != nil {
+		return fmt.Errorf("marshal credentials: %w", err)
+	}
+	indexJSON, err := json.Marshal([]string{accountID})
+	if err != nil {
+		return fmt.Errorf("marshal index: %w", err)
+	}
+
+	b64Cred := base64Encode(credJSON)
+	b64Index := base64Encode(indexJSON)
+
+	// Decode base64 inside the pod to write safe JSON files, then SIGHUP to reload.
+	script := fmt.Sprintf(
+		`mkdir -p ~/.openclaw/openclaw-weixin/accounts && `+
+			`echo %s | base64 -d > ~/.openclaw/openclaw-weixin/accounts/%s.json && `+
+			`echo %s | base64 -d > ~/.openclaw/openclaw-weixin/accounts.json && `+
+			`kill -HUP 1`,
+		b64Cred, accountID, b64Index,
+	)
+
+	_, err = commander.ExecSimple(ctx, sandboxID, []string{"sh", "-c", script})
+	return err
+}
+
+func base64Encode(data []byte) string {
+	return base64.StdEncoding.EncodeToString(data)
+}
+
+// normalizeAccountID converts a raw ilink bot ID (e.g. "abc@im.bot") to a
+// filesystem-safe key (e.g. "abc-im-bot"), matching the plugin's normalizeAccountId.
+func normalizeAccountID(raw string) string {
+	var out []byte
+	for _, c := range []byte(raw) {
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '-', c == '_':
+			out = append(out, c)
+		default:
+			out = append(out, '-')
+		}
+	}
+	return string(out)
 }

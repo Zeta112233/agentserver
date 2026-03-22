@@ -35,6 +35,7 @@ import {
   type TraceDetailResponse,
 } from '../lib/api'
 import { ConfirmModal } from './Modals'
+import { WeixinLoginModal } from './WeixinLoginModal'
 
 type Tab = 'overview' | 'traces'
 
@@ -124,6 +125,7 @@ export function SandboxDetail({ sandbox, onPause, onResume, onDelete, onRename }
   const [confirmPause, setConfirmPause] = useState(false)
   const [editing, setEditing] = useState(false)
   const [editName, setEditName] = useState(sandbox.name)
+  const [showWeixinLogin, setShowWeixinLogin] = useState(false)
 
   // Fetch data on sandbox change.
   useEffect(() => {
@@ -225,6 +227,15 @@ export function SandboxDetail({ sandbox, onPause, onResume, onDelete, onRename }
                 {isOpenClaw ? 'Open' : 'Open'}
               </a>
             )}
+            {isOpenClaw && isRunning && (
+              <button
+                onClick={() => setShowWeixinLogin(true)}
+                className="inline-flex items-center gap-1.5 rounded-md border border-green-500/30 bg-green-500/10 px-3 py-1.5 text-xs font-medium text-green-400 hover:bg-green-500/20 transition-colors"
+              >
+                <MessageSquare size={13} />
+                WeChat
+              </button>
+            )}
             {!sandbox.is_local && isRunning && (
               <button
                 onClick={() => setConfirmPause(true)}
@@ -303,6 +314,9 @@ export function SandboxDetail({ sandbox, onPause, onResume, onDelete, onRename }
           onConfirm={() => { setConfirmPause(false); onPause(sandbox.id) }}
           onCancel={() => setConfirmPause(false)}
         />
+      )}
+      {showWeixinLogin && (
+        <WeixinLoginModal sandboxId={sandbox.id} onClose={() => setShowWeixinLogin(false)} />
       )}
     </div>
   )

@@ -280,6 +280,32 @@ export async function resumeSandbox(id: string): Promise<void> {
   if (!res.ok) throw new Error('Failed to resume sandbox')
 }
 
+// WeChat QR Login API
+
+export interface WeixinQRStartResult {
+  qrcode_url: string
+  message: string
+}
+
+export interface WeixinQRWaitResult {
+  connected: boolean
+  status: 'wait' | 'scaned' | 'confirmed' | 'expired'
+  message: string
+  qrcode_url?: string
+}
+
+export async function weixinQRStart(sandboxId: string): Promise<WeixinQRStartResult> {
+  const res = await fetch(`/api/sandboxes/${sandboxId}/weixin/qr-start`, { method: 'POST' })
+  if (!res.ok) throw new Error('Failed to start WeChat login')
+  return res.json()
+}
+
+export async function weixinQRWait(sandboxId: string): Promise<WeixinQRWaitResult> {
+  const res = await fetch(`/api/sandboxes/${sandboxId}/weixin/qr-wait`, { method: 'POST' })
+  if (!res.ok) throw new Error('Failed to poll WeChat login status')
+  return res.json()
+}
+
 // Usage & Traces API
 
 export interface UsageSummary {
