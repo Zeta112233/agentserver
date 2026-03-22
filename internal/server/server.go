@@ -1577,12 +1577,20 @@ func (s *Server) saveWeixinCredentials(ctx context.Context, sandboxID string, re
 	b64Cred := base64Encode(credJSON)
 	b64Index := base64Encode(indexJSON)
 
-	// Decode base64 inside the pod to write safe JSON files, then SIGHUP to reload.
+	// Decode base64 inside the pod to write safe JSON files, then poke the
+	// config file so the gateway's chokidar watcher triggers a channel reload.
+	// (Node.js terminates on SIGHUP, so we cannot use kill -HUP 1.)
 	script := fmt.Sprintf(
 		`mkdir -p ~/.openclaw/openclaw-weixin/accounts && `+
 			`echo %s | base64 -d > ~/.openclaw/openclaw-weixin/accounts/%s.json && `+
 			`echo %s | base64 -d > ~/.openclaw/openclaw-weixin/accounts.json && `+
-			`kill -HUP 1`,
+			`node -e "`+
+			`const fs=require('fs'),p=require('os').homedir()+'/.openclaw/openclaw.json';`+
+			`const c=JSON.parse(fs.readFileSync(p,'utf8'));`+
+			`c.channels=c.channels||{};`+
+			`c.channels['openclaw-weixin']=c.channels['openclaw-weixin']||{};`+
+			`c.channels['openclaw-weixin']._accountsUpdatedAt=Date.now();`+
+			`fs.writeFileSync(p,JSON.stringify(c,null,2))"`,
 		b64Cred, accountID, b64Index,
 	)
 
