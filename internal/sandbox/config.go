@@ -135,8 +135,9 @@ func BuildOpenclawConfig(proxyBaseURL, proxyToken, gatewayToken string, weixinEn
 	}
 	type config struct {
 		Gateway struct {
-			Auth      *gatewayAuth `json:"auth,omitempty"`
-			ControlUI struct {
+			Auth           *gatewayAuth `json:"auth,omitempty"`
+			TrustedProxies []string     `json:"trustedProxies,omitempty"`
+			ControlUI      struct {
 				Enabled             bool `json:"enabled,omitempty"`
 				AllowInsecureAuth   bool `json:"allowInsecureAuth,omitempty"`
 				AllowOriginFallback bool `json:"dangerouslyAllowHostHeaderOriginFallback,omitempty"`
@@ -155,6 +156,9 @@ func BuildOpenclawConfig(proxyBaseURL, proxyToken, gatewayToken string, weixinEn
 	if gatewayToken != "" {
 		c.Gateway.Auth = &gatewayAuth{Token: gatewayToken}
 	}
+	// Trust cluster-internal proxy IPs so the gateway reads our injected
+	// Authorization header and X-Forwarded-For on WebSocket upgrades.
+	c.Gateway.TrustedProxies = []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"}
 	c.Gateway.ControlUI.Enabled = true
 	c.Gateway.ControlUI.AllowInsecureAuth = true
 	c.Gateway.ControlUI.AllowOriginFallback = true
