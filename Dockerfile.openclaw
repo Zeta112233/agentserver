@@ -1,0 +1,5 @@
+ARG BASE_IMAGE=openclaw:latest
+FROM ${BASE_IMAGE}
+
+# Pre-install the WeChat channel plugin so sandbox startup doesn't need to fetch it.
+RUN openclaw plugins install "@tencent-weixin/openclaw-weixin"

@@ -341,12 +341,7 @@ func (m *Manager) StartContainerWithIP(id string, opts process.StartOptions) (st
 		}
 		// Build openclaw config JSON with gateway settings and Anthropic proxy.
 		openclawCfg := BuildOpenclawConfig(proxyBaseURL, opts.ProxyToken, opts.OpenclawToken, m.cfg.OpenclawWeixinEnabled)
-		installPlugin := ""
-		if m.cfg.OpenclawWeixinEnabled {
-			installPlugin = `openclaw plugins install "@tencent-weixin/openclaw-weixin" 2>/dev/null || true
-`
-		}
-		containerCmd = []string{"sh", "-c", installPlugin + `mkdir -p ~/.openclaw && cat > ~/.openclaw/openclaw.json << 'CFGEOF'
+		containerCmd = []string{"sh", "-c", `mkdir -p ~/.openclaw && cat > ~/.openclaw/openclaw.json << 'CFGEOF'
 ` + openclawCfg + `
 CFGEOF
 exec node openclaw.mjs gateway --allow-unconfigured --bind lan`}

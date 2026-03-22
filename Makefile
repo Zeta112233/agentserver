@@ -1,4 +1,4 @@
-.PHONY: dev build clean frontend backend agent agent-all llmproxy docker docker-agent docker-llmproxy docker-all
+.PHONY: dev build clean frontend backend agent agent-all llmproxy docker docker-agent docker-llmproxy docker-openclaw docker-all
 
 # Development: run frontend dev server + Go backend
 dev:
@@ -38,5 +38,8 @@ docker-agent:
 
 docker-llmproxy:
 	docker build -f Dockerfile.llmproxy -t llmproxy:latest .
+
+docker-openclaw:
+	docker build -f Dockerfile.openclaw -t openclaw-weixin:latest .
 
 docker-all: docker docker-agent docker-llmproxy

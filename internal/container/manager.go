@@ -198,12 +198,7 @@ func (m *Manager) EnsureContainer(id string, opts process.StartOptions) (string,
 	if opts.SandboxType == "openclaw" {
 		proxyBaseURL := sandbox.ExtractProxyBaseURL(m.cfg.OpencodeConfigContent)
 		openclawCfg := sandbox.BuildOpenclawConfig(proxyBaseURL, opts.ProxyToken, opts.OpenclawToken, m.cfg.OpenclawWeixinEnabled)
-		installPlugin := ""
-		if m.cfg.OpenclawWeixinEnabled {
-			installPlugin = `openclaw plugins install "@tencent-weixin/openclaw-weixin" 2>/dev/null || true
-`
-		}
-		containerConfig.Cmd = []string{"sh", "-c", installPlugin + `mkdir -p ~/.openclaw && cat > ~/.openclaw/openclaw.json << 'CFGEOF'
+		containerConfig.Cmd = []string{"sh", "-c", `mkdir -p ~/.openclaw && cat > ~/.openclaw/openclaw.json << 'CFGEOF'
 ` + openclawCfg + `
 CFGEOF
 exec node openclaw.mjs gateway --allow-unconfigured --bind lan`}
