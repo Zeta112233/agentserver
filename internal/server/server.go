@@ -1168,11 +1168,12 @@ func (s *Server) handleCreateSandbox(w http.ResponseWriter, r *http.Request) {
 	id := uuid.New().String()
 	sandboxName := "agent-sandbox-" + shortID(id)
 
-	// Look up BYOK config for this workspace.
+	// Look up modelserver connection and BYOK config for this workspace.
+	msConn, _ := s.DB.GetModelserverConnection(wsID)
 	byokCfg, err := s.DB.GetWorkspaceLLMConfig(wsID)
 	if err != nil {
 		log.Printf("failed to get BYOK config for workspace %s: %v", wsID, err)
-		byokCfg = nil // non-fatal: fall through to proxy path
+		byokCfg = nil
 	}
 
 	// Generate auth credentials based on sandbox type.
@@ -1213,7 +1214,14 @@ func (s *Server) handleCreateSandbox(w http.ResponseWriter, r *http.Request) {
 		CPU:              cpuMillis,
 		Memory:           memBytes,
 	}
-	if byokCfg != nil {
+	// Priority: modelserver > BYOK > platform default
+	if msConn != nil {
+		// Modelserver connection: sandbox routes through llmproxy (no BYOK injection)
+		startOpts.CustomModels = make([]process.LLMModel, len(msConn.Models))
+		for i, m := range msConn.Models {
+			startOpts.CustomModels[i] = process.LLMModel{ID: m.ID, Name: m.Name}
+		}
+	} else if byokCfg != nil {
 		startOpts.BYOKBaseURL = byokCfg.BaseURL
 		startOpts.BYOKAPIKey = byokCfg.APIKey
 		startOpts.BYOKModels = make([]process.LLMModel, len(byokCfg.Models))

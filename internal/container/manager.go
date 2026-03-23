@@ -208,6 +208,8 @@ func (m *Manager) EnsureContainer(id string, opts process.StartOptions) (string,
 			cfgBaseURL = opts.BYOKBaseURL
 			cfgAPIKey = opts.BYOKAPIKey
 			cfgModels = opts.BYOKModels
+		} else if len(opts.CustomModels) > 0 {
+			cfgModels = opts.CustomModels
 		}
 		openclawCfg := sandbox.BuildOpenclawConfig(cfgBaseURL, cfgAPIKey, opts.OpenclawToken, m.cfg.OpenclawWeixinEnabled, cfgModels)
 		containerConfig.Cmd = []string{"sh", "-c", `mkdir -p ~/.openclaw && cat > ~/.openclaw/openclaw.json << 'CFGEOF'
