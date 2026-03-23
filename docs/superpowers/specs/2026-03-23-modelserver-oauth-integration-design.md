@@ -2,42 +2,43 @@
 
 ## Overview
 
-Enable agentserver workspace users to connect their workspace to a modelserver project via standard OAuth 2.0 Authorization Code Flow, powered by Ory Hydra. This eliminates the need for users to manually copy-paste API keys — they simply log into modelserver, select a project, and the API key is automatically provisioned and configured.
+Enable agentserver workspace users to connect their workspace to a modelserver project via OAuth 2.0 Authorization Code Flow (Ory Hydra). After authorization, the workspace's LLM traffic is automatically routed through modelserver using the OAuth access_token — no API keys involved. Token refresh is handled transparently by agentserver's llmproxy.
 
 ## Context
 
-- **agentserver** — Multi-tenant coding agent platform with BYOK (Bring Your Own Key) system. Workspaces store LLM config (base_url, api_key, models) in `workspace_llm_config` table.
-- **modelserver** — LLM API gateway at `https://code.ai.cs.ac.cn`. Projects have members with roles, credit-based rate limiting, and API keys (`ms-` prefixed). Admin API on `:8081`, proxy on `:8080`.
-- **Ory Hydra** — Open-source OAuth 2.0 / OIDC server deployed as a standalone Docker container alongside modelserver.
+- **agentserver** — Multi-tenant coding agent platform. Sandboxes call LLM providers either directly (BYOK mode) or through agentserver's built-in llmproxy (:8081).
+- **modelserver** — LLM API gateway. Admin API on `:8081`, LLM proxy on `:8080`. Projects have members (owner/maintainer/developer), credit-based rate limiting, and subscriptions.
+- **Ory Hydra** — OAuth 2.0 / OIDC server, deployed as standalone Docker container. Public on `:4444`, Admin on `:4445`.
 
-The two systems have independent user accounts. Users may need to log into modelserver separately during the OAuth flow.
+The two systems have independent user accounts. Domain routing between ports is operator-managed and not covered here.
 
 ## Architecture
 
 ```
-                          modelserver domain (code.ai.cs.ac.cn)
-┌────────────────────────────────────────────────────────────────────┐
-│                                                                    │
-│  ┌──────────────────┐   ┌──────────────────┐   ┌──────────────┐  │
-│  │  Ory Hydra        │   │  modelserver     │   │ modelserver  │  │
-│  │  Public :4444     │◄─►│  Admin API :8081 │   │ Proxy :8080  │  │
-│  │  Admin  :4445     │   │  (Login/Consent  │   │              │  │
-│  │                   │   │   Provider)      │   │              │  │
-│  └──────────────────┘   └──────────────────┘   └──────────────┘  │
-│                                                                    │
-└────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│  modelserver infrastructure                                      │
+│                                                                  │
+│  ┌────────────┐   ┌─────────────────┐   ┌────────────────────┐  │
+│  │ Ory Hydra   │   │ modelserver     │   │ modelserver        │  │
+│  │ Public:4444 │◄─►│ Admin API :8081 │   │ Proxy :8080        │  │
+│  │ Admin :4445 │   │ (Login/Consent  │   │ (accepts API keys  │  │
+│  │             │   │  Provider)      │   │  AND Hydra tokens) │  │
+│  └────────────┘   └─────────────────┘   └────────────────────┘  │
+└──────────────────────────────────────────────────────────────────┘
 
-                          agentserver domain
-┌────────────────────────────────────────────────────────────────────┐
-│                                                                    │
-│  ┌──────────────────┐   ┌──────────────────┐                      │
-│  │  agentserver      │   │  Web Frontend    │                      │
-│  │  API :8080        │   │  (React)         │                      │
-│  │  (OAuth Client)   │   │                  │                      │
-│  └──────────────────┘   └──────────────────┘                      │
-│                                                                    │
-└────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│  agentserver infrastructure                                      │
+│                                                                  │
+│  ┌───────────────┐  ┌──────────┐  ┌────────────────┐            │
+│  │ agentserver    │  │ llmproxy │  │ Web Frontend   │            │
+│  │ API :8080      │  │ :8081    │  │ (React)        │            │
+│  │ (OAuth Client) │──│ forwards │  │                │            │
+│  │                │  │ to MS    │  │                │            │
+│  └───────────────┘  └──────────┘  └────────────────┘            │
+└──────────────────────────────────────────────────────────────────┘
 ```
+
+**Key insight:** When a workspace is connected to modelserver, sandboxes use the same llmproxy path as non-BYOK mode. The llmproxy detects the modelserver connection and forwards to modelserver with the current access_token, refreshing it transparently. No credentials are injected into the sandbox.
 
 ## OAuth 2.0 Flow
 
@@ -52,9 +53,9 @@ User Browser           agentserver          Hydra(:4444)        modelserver(:808
     │    ?client_id=agentserver                 │                     │
     │    &redirect_uri=...                      │                     │
     │    &state=<random_hex>                    │                     │
-    │    &scope=project:apikey                  │                     │
+    │    &scope=project:llm offline_access      │                     │
     │    &response_type=code                    │                     │
-    │    &code_challenge=<S256 hash>            │                     │
+    │    &code_challenge=<S256>                 │                     │
     │    &code_challenge_method=S256            │                     │
     │<─────────────────────│                    │                     │
     │                      │                    │                     │
@@ -64,10 +65,9 @@ User Browser           agentserver          Hydra(:4444)        modelserver(:808
     │    ?login_challenge=...                   │                     │
     │<──────────────────────────────────────────│                     │
     │                                                                 │
-    │ 5. Login page (if not already logged in)                        │
+    │ 5. Login (if not already logged in)                             │
     │<───────────────────────────────────────────────────────────────>│
-    │ 6. Accept login challenge (Hydra Admin API)                     │
-    │    302 → back to Hydra                                          │
+    │ 6. Accept login challenge → 302 back to Hydra                   │
     │<───────────────────────────────────────────────────────────────│
     │                                           │                     │
     │ 7. 302 → modelserver /oauth/consent       │                     │
@@ -75,347 +75,474 @@ User Browser           agentserver          Hydra(:4444)        modelserver(:808
     │<──────────────────────────────────────────│                     │
     │                                                                 │
     │ 8. Project selection page                                       │
-    │    (lists user's projects with roles)                           │
     │<───────────────────────────────────────────────────────────────>│
-    │                                                                 │
     │ 9. User selects project                                         │
     │───────────────────────────────────────────────────────────────>│
     │                                                                 │
-    │ 10. modelserver:                                                │
-    │     a) Creates API key for selected project                     │
-    │     b) Accepts consent challenge with custom claims:            │
-    │        {project_id, project_name, key_id}                       │
+    │ 10. Accept consent with:                                        │
+    │     grant_scope: ["project:llm", "offline_access"]              │
+    │     session.access_token: {project_id, project_name, user_id}   │
+    │     remember: false                                             │
     │     302 → back to Hydra                                         │
     │<───────────────────────────────────────────────────────────────│
     │                                           │                     │
-    │ 11. Hydra generates authorization code    │                     │
-    │     302 → agentserver callback            │                     │
-    │     ?code=...&state=...                   │                     │
+    │ 11. 302 → agentserver callback ?code&state│                     │
     │<──────────────────────────────────────────│                     │
     │                      │                    │                     │
-    │ 12. GET /api/auth/modelserver/callback    │                     │
-    │     ?code=...&state=...                   │                     │
+    │ 12. callback?code&state                   │                     │
     │─────────────────────>│                    │                     │
     │                      │                    │                     │
     │                      │ 13. POST /oauth2/token                   │
-    │                      │     {code, client_id, client_secret,     │
-    │                      │      code_verifier}                      │
+    │                      │     {code, client_secret, code_verifier} │
     │                      │───────────────────>│                     │
-    │                      │ 14. {access_token} │                     │
-    │                      │     (with custom   │                     │
-    │                      │      claims)       │                     │
+    │                      │ 14. {access_token, refresh_token,        │
+    │                      │      expires_in}   │                     │
     │                      │<──────────────────│                     │
-    │                      │                                          │
-    │                      │ 15. GET /api/v1/oauth/key-info           │
+    │                      │                    │                     │
+    │                      │ 15. GET /v1/models (:8080)               │
     │                      │     Authorization: Bearer <access_token> │
     │                      │─────────────────────────────────────────>│
-    │                      │ 16. {api_key, project_id, project_name}  │
+    │                      │ 16. {data: ["claude-sonnet-4-...", ...]} │
     │                      │<────────────────────────────────────────│
-    │                      │                                          │
-    │                      │ 17. GET /v1/models                       │
-    │                      │     x-api-key: <api_key>                │
-    │                      │─────────────────────────────────────────>│
-    │                      │ 18. {data: ["model-a", ...]}            │
-    │                      │     (string[] → transform to {id,name}) │
-    │                      │<────────────────────────────────────────│
-    │                      │                                          │
-    │                      │ 19. Save to workspace_llm_config:        │
-    │                      │     base_url="https://code.ai.cs.ac.cn"  │
-    │                      │     api_key=<api_key>                    │
-    │                      │     models=<models>                      │
-    │                      │     source="modelserver"                 │
-    │                      │     source_meta={project_id,project_name}│
-    │                      │                                          │
-    │ 20. 302 → workspace  │                                          │
-    │     settings page    │                                          │
-    │<─────────────────────│                                          │
+    │                      │                    │                     │
+    │                      │ 17. Save tokens + models to              │
+    │                      │     workspace_modelserver_tokens         │
+    │                      │                    │                     │
+    │ 18. 302 → workspace settings              │                     │
+    │<─────────────────────│                    │                     │
+```
+
+**After connection is established — sandbox LLM call flow:**
+
+```
+Sandbox              agentserver llmproxy(:8081)        modelserver proxy(:8080)
+  │                          │                                │
+  │ POST /v1/messages        │                                │
+  │ proxy_token: <token>     │                                │
+  │─────────────────────────>│                                │
+  │                          │                                │
+  │                          │ validate proxy_token            │
+  │                          │ → workspace has MS connection   │
+  │                          │                                │
+  │                          │ get access_token (refresh if    │
+  │                          │ expired)                        │
+  │                          │                                │
+  │                          │ POST /v1/messages               │
+  │                          │ Authorization: Bearer <AT>      │
+  │                          │───────────────────────────────>│
+  │                          │                                │
+  │                          │ <streaming response>           │
+  │                          │<───────────────────────────────│
+  │                          │                                │
+  │ <streaming response>     │                                │
+  │<─────────────────────────│                                │
 ```
 
 ## modelserver Changes
 
 ### 1. Ory Hydra Deployment
 
-Deploy Hydra as a standalone Docker container:
+Deploy Hydra as standalone Docker container:
 
-- **Public port (:4444)**: Exposed externally for `/oauth2/auth`, `/oauth2/token`, `/.well-known/openid-configuration`
-- **Admin port (:4445)**: Internal only, used by modelserver to manage login/consent flows
+- **Public :4444**: `/oauth2/auth`, `/oauth2/token`, `/.well-known/openid-configuration`
+- **Admin :4445**: Internal, used by modelserver for login/consent flows
 - **Database**: Shared PostgreSQL (separate schema) or dedicated DB
 - **Configuration**:
-  - `URLS_LOGIN=https://code.ai.cs.ac.cn/oauth/login`
-  - `URLS_CONSENT=https://code.ai.cs.ac.cn/oauth/consent`
-  - `URLS_SELF_ISSUER=https://code.ai.cs.ac.cn`
+  - `URLS_LOGIN` → modelserver `/oauth/login` endpoint
+  - `URLS_CONSENT` → modelserver `/oauth/consent` endpoint
+  - `URLS_SELF_ISSUER` → Hydra external URL
 
-Register agentserver as an OAuth client in Hydra:
+Register agentserver as OAuth client:
 ```json
 {
   "client_id": "agentserver",
-  "client_secret": "<generated-secret>",
-  "redirect_uris": ["https://<agentserver-domain>/api/auth/modelserver/callback"],
-  "grant_types": ["authorization_code"],
+  "client_secret": "<generated>",
+  "redirect_uris": ["https://<agentserver>/api/auth/modelserver/callback"],
+  "grant_types": ["authorization_code", "refresh_token"],
   "response_types": ["code"],
-  "scope": "project:apikey",
+  "scope": "project:llm offline_access",
   "token_endpoint_auth_method": "client_secret_post"
 }
 ```
 
+`offline_access` enables refresh_token issuance. `grant_types` includes `refresh_token`.
+
 ### 2. Login Provider
 
-**Session mechanism:** modelserver currently uses JWT Bearer tokens (short-lived, 15-minute access tokens) without cookie-based sessions. For the Hydra login flow, modelserver needs a new cookie-based session mechanism:
-- On successful login during the OAuth flow, set a `modelserver-oauth-session` cookie containing an encrypted `{user_id, expires_at}` payload (AES-GCM with the server's encryption key, 24-hour TTL)
-- This cookie is HttpOnly, Secure, SameSite=Lax, scoped to the modelserver domain
-- On subsequent OAuth flows, the login provider checks this cookie to skip the login screen
+**Session mechanism:** modelserver currently uses short-lived JWT (15-min) without cookie sessions. Add a new cookie session for the OAuth login flow:
+- `modelserver-oauth-session` cookie: AES-GCM encrypted `{user_id, expires_at}` (24-hour TTL)
+- Flags: HttpOnly, Secure, SameSite=Lax
 
-**Endpoints:**
+**Endpoints (new, on admin API :8081):**
 
 `GET /oauth/login?login_challenge=<challenge>`
-- Calls Hydra Admin API `GET /admin/oauth2/auth/requests/login?login_challenge=<challenge>` to get challenge details
-- If `modelserver-oauth-session` cookie is present and valid → accept the login challenge immediately (Hydra's `skip` mechanism)
-- Otherwise → render login page
+- Calls Hydra Admin `GET /admin/oauth2/auth/requests/login?login_challenge=<challenge>`
+- If valid session cookie exists → accept login immediately (Hydra `skip`)
+- Otherwise → render login page (Go HTML template)
 
 `POST /oauth/login`
-- Request body: `{login_challenge, email, password}` (or OAuth provider redirect)
-- Validates user credentials (reuse existing auth logic from `internal/auth/`)
-- On success:
-  - Sets `modelserver-oauth-session` cookie
-  - Calls Hydra Admin API `PUT /admin/oauth2/auth/requests/login/accept` with `{subject: <user_id>}`
-  - Redirects to the URL returned by Hydra
+- Body: `{login_challenge, email, password}`
+- Validates credentials (reuse `internal/auth/`)
+- On success: set session cookie, accept login via Hydra Admin API, redirect
 
-**Implementation notes:**
-- The login page can offer the same login options as the main modelserver UI (GitHub, Google, OIDC, etc.)
-- For OAuth provider login (GitHub/Google), the flow is: login page → redirect to GitHub → callback → set session cookie → accept Hydra login challenge → redirect back to Hydra. This creates a nested OAuth flow which works but adds complexity. For v1, email/password login is sufficient.
+**Notes:**
+- Login page rendered via Go `html/template` (new directory: `internal/admin/templates/`)
+- v1: email/password only. OAuth provider buttons (GitHub/Google) add nested-OAuth complexity, defer to later.
 
 ### 3. Consent Provider
 
-**Endpoints:**
+**Endpoints (new, on admin API :8081):**
 
 `GET /oauth/consent?consent_challenge=<challenge>`
-- Calls Hydra Admin API `GET /admin/oauth2/auth/requests/consent?consent_challenge=<challenge>` to get challenge details and user identity
-- Fetches user's projects (where user is owner, maintainer, or developer)
-- Renders project selection page showing project name, description, role, and subscription plan
+- Calls Hydra Admin to get challenge details + user identity
+- Fetches user's projects via `store.ListProjectsByUser(userID)`
+- Renders project selection page (Go HTML template)
 
 `POST /oauth/consent`
-- Request body: `{consent_challenge, project_id}`
-- Validates user has access to the selected project
-- Creates an API key for the project via `store.CreateAPIKey()`:
-  1. `store.CreateAPIKey(projectID, userID, name, description, allowedModels, expiresAt)` returns `(APIKey, plaintextKey, error)`
-  2. The returned `APIKey.ID` is a `UUID` (generated by PostgreSQL `gen_random_uuid()` via `RETURNING id`)
-  3. Key params:
-     - Name: `"agentserver-oauth-<timestamp>"`
-     - Description: `"Auto-created via agentserver OAuth integration"`
-     - Allowed models: `nil` (no restrictions, allows all models)
-     - ExpiresAt: `nil` (no expiration)
-  4. Stores the plaintext API key in `oauth_pending_keys` table, encrypted with AES (using `key_id` as the primary key referencing `api_keys.id UUID`)
-- Calls Hydra Admin API `PUT /admin/oauth2/auth/requests/consent/accept` with:
-  - `grant_scope: ["project:apikey"]`
-  - `session.access_token: {project_id, project_name, key_id}`
-  - `remember: false` (always show project selection — the consent screen IS the project selector)
-- Redirects to the URL returned by Hydra
+- Body: `{consent_challenge, project_id}`
+- Validates user has access to the project
+- Accepts consent via Hydra Admin API:
+  - `grant_scope: ["project:llm", "offline_access"]`
+  - `session.access_token: {project_id, project_name, user_id}`
+  - `remember: false`
+- Redirects to URL from Hydra
 
-### 4. Key Info Endpoint
+**No API key creation.** The consent just binds the access_token to a project.
 
-`GET /api/v1/oauth/key-info`
-- **Auth**: Hydra-issued access_token (validated via Hydra's token introspection or JWT verification)
-- Extracts `key_id` from token claims
-- Returns the API key plaintext + project metadata
-- The API key plaintext is stored temporarily (e.g., in-memory cache or encrypted DB column with short TTL) between consent acceptance and this call
+### 4. Proxy Hydra Token Auth
 
-**Response:**
-```json
-{
-  "api_key": "ms-...",
-  "project_id": "uuid",
-  "project_name": "My Project"
-}
-```
+modelserver's LLM proxy (:8080) currently authenticates via API keys only. Add Hydra access_token support:
 
-**Security:** This endpoint is the only place the API key plaintext is returned. It should:
-- Only work once per key_id (mark as retrieved after first call)
-- Expire the temporary storage after 5 minutes
-- Require a valid Hydra access_token with matching key_id claim
+**Updated `extractAndValidateAuth` flow:**
+1. Extract token from `x-api-key` header or `Authorization: Bearer` header
+2. Try API key validation (existing: HMAC check → SHA256 hash lookup)
+3. If not a valid API key, try Hydra token introspection:
+   - `POST /admin/oauth2/introspect` to Hydra Admin (:4445) with `{token}`
+   - If `active: true`, extract `ext.project_id` and `ext.user_id`
+   - Load project from DB, verify status is active
+   - Build an auth context equivalent to API key auth (project, user, rate limit policy)
+4. If neither validates → 401
 
-### 5. New Database Migration
+**Rate limiting:** When authenticated via Hydra token, rate limiting uses the project's subscription policy (same as API key auth for that project). The `ext.user_id` enables per-user credit quota enforcement if configured on the project member.
 
-```sql
--- Temporary storage for OAuth-generated API key plaintexts
-CREATE TABLE oauth_pending_keys (
-    key_id UUID PRIMARY KEY REFERENCES api_keys(id) ON DELETE CASCADE,
-    encrypted_key BYTEA NOT NULL,          -- AES-encrypted API key plaintext
-    expires_at TIMESTAMPTZ NOT NULL,       -- 5 minutes from creation
-    retrieved BOOLEAN DEFAULT FALSE,
-    created_at TIMESTAMPTZ DEFAULT NOW()
-);
+**Caching:** Token introspection results can be cached for a short period (e.g., 30 seconds) keyed by token hash, to avoid per-request Hydra calls.
 
-CREATE INDEX idx_oauth_pending_keys_expires ON oauth_pending_keys(expires_at);
-```
+### 5. Login/Consent Templates
 
-A background job or lazy cleanup deletes expired rows.
+New directory: `internal/admin/templates/`
 
-### 6. Login/Consent Frontend Pages
+**`login.html`:** Email + password form, hidden `login_challenge` field, error display. Styled to match modelserver branding.
 
-modelserver needs to serve HTML pages for the login and consent flows. These can be:
-- Server-side rendered Go templates (simplest, no additional build pipeline)
-- Or a small SPA served from the admin API
-
-**Login page**: Email/password form + OAuth provider buttons (matching existing modelserver login options).
-
-**Consent page**: List of user's projects as selectable cards showing:
-- Project name and description
-- User's role in the project
-- Current subscription plan
-- A "Select" button
+**`consent.html`:** Project selection cards showing name, description, role, subscription plan. Hidden `consent_challenge` field. Each project is a form POST button.
 
 ## agentserver Changes
 
 ### 1. New Configuration
 
-Environment variables:
 ```
-MODELSERVER_OAUTH_CLIENT_ID       - OAuth client ID registered in Hydra (e.g., "agentserver")
+MODELSERVER_OAUTH_CLIENT_ID       - OAuth client ID (e.g., "agentserver")
 MODELSERVER_OAUTH_CLIENT_SECRET   - OAuth client secret
-MODELSERVER_OAUTH_AUTH_URL        - Hydra authorization endpoint (https://code.ai.cs.ac.cn/oauth2/auth)
-MODELSERVER_OAUTH_TOKEN_URL       - Hydra token endpoint (https://code.ai.cs.ac.cn/oauth2/token)
-MODELSERVER_OAUTH_REDIRECT_URI    - Callback URL (https://<agentserver>/api/auth/modelserver/callback)
-MODELSERVER_KEY_INFO_URL          - Key info endpoint (https://code.ai.cs.ac.cn/api/v1/oauth/key-info)
-MODELSERVER_BASE_URL              - Proxy base URL (https://code.ai.cs.ac.cn)
+MODELSERVER_OAUTH_AUTH_URL        - Hydra public authorization endpoint
+MODELSERVER_OAUTH_TOKEN_URL       - Hydra public token endpoint
+MODELSERVER_OAUTH_INTROSPECT_URL  - Hydra admin introspection endpoint (for extracting token claims in callback)
+MODELSERVER_OAUTH_REDIRECT_URI    - Callback URL
+MODELSERVER_PROXY_URL             - modelserver LLM proxy URL (for forwarding and /v1/models)
 ```
 
-Add to `internal/config` or directly in server initialization.
+### 2. Database Migration
 
-### 2. New Backend Endpoints
-
-**`GET /api/workspaces/{id}/modelserver/connect`**
-- Requires: authenticated user with owner/maintainer role
-- State parameter handling (follows the same pattern as existing OIDC in `internal/auth/oidc.go`):
-  1. Generate a random 32-byte hex string as `state`
-  2. Store in cookie `modelserver-oauth-state` (HttpOnly, Secure, SameSite=Lax, 10-minute expiry)
-  3. Store workspace_id in a separate cookie `modelserver-oauth-wsid` (same attributes)
-- PKCE (RFC 7636):
-  1. Generate `code_verifier`: 32 random bytes, base64url-encoded
-  2. Compute `code_challenge`: SHA256(code_verifier), base64url-encoded
-  3. Store `code_verifier` in cookie `modelserver-oauth-pkce` (same attributes)
-- Redirects to: `MODELSERVER_OAUTH_AUTH_URL?client_id=...&redirect_uri=...&state=...&scope=project:apikey&response_type=code&code_challenge=...&code_challenge_method=S256`
-
-**`GET /api/auth/modelserver/callback`**
-- Query params: `code`, `state`
-- Processing:
-  1. Validate `state` matches `modelserver-oauth-state` cookie (same random-hex comparison as existing OIDC)
-  2. Extract `workspace_id` from `modelserver-oauth-wsid` cookie
-  3. Extract `code_verifier` from `modelserver-oauth-pkce` cookie
-  4. Clear all three OAuth cookies
-  5. Verify user has owner/maintainer role on the workspace
-  6. Exchange code for access_token: `POST MODELSERVER_OAUTH_TOKEN_URL` with `{grant_type: "authorization_code", code, client_id, client_secret, redirect_uri, code_verifier}`
-     - Timeout: 10 seconds
-  7. Fetch key info: `GET MODELSERVER_KEY_INFO_URL` with `Authorization: Bearer <access_token>`
-     - Response: `{api_key, project_id, project_name}`
-     - Timeout: 10 seconds
-  8. Fetch models: `GET MODELSERVER_BASE_URL/v1/models` with `x-api-key: <api_key>` header (matching modelserver's primary API key auth convention)
-     - Response: `{data: ["model-a", "model-b", ...]}`
-     - **Transform string[] to []LLMModel**: for each model string `s`, create `LLMModel{ID: s, Name: s}` (use the model ID string as both `id` and `name`, since modelserver returns only IDs)
-     - Timeout: 10 seconds; on failure, use empty models list (non-fatal)
-  9. If workspace already has a modelserver-sourced config with a `key_id` in `source_meta`, attempt to revoke the old key:
-     - `DELETE MODELSERVER_BASE_URL/api/v1/projects/{old_project_id}/keys/{old_key_id}` with `x-api-key: <old_api_key>` — best effort, log errors but do not block
-  10. Save to workspace_llm_config: `SetWorkspaceLLMConfig(workspaceID, baseURL, apiKey, models, "modelserver", sourceMeta)` where `sourceMeta = {project_id, project_name, key_id}`
-  11. Redirect to frontend: `/workspaces/{id}?tab=settings&modelserver=connected`
-- Error handling: On any failure (steps 1-7, 10), redirect to `/workspaces/{id}?tab=settings&modelserver=error&message=<urlencoded>`
-
-### 3. Database Migration
+**`006_modelserver_oauth.sql`:**
 
 ```sql
--- 006_llm_config_source.sql
-ALTER TABLE workspace_llm_config
-    ADD COLUMN source TEXT NOT NULL DEFAULT 'manual',
-    ADD COLUMN source_meta JSONB;
+CREATE TABLE workspace_modelserver_tokens (
+    workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+    project_id TEXT NOT NULL,
+    project_name TEXT NOT NULL,
+    user_id TEXT NOT NULL,              -- modelserver user ID (from token claims)
+    access_token TEXT NOT NULL,
+    refresh_token TEXT NOT NULL,
+    token_expires_at TIMESTAMPTZ NOT NULL,
+    models JSONB NOT NULL DEFAULT '[]', -- cached [{id, name}] from /v1/models
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
 ```
 
-- `source`: `"manual"` (hand-entered BYOK) or `"modelserver"` (OAuth flow)
-- `source_meta`: For modelserver source: `{"project_id": "...", "project_name": "...", "key_id": "..."}`
+**Note:** No changes to `workspace_llm_config`. The modelserver connection is an independent path from manual BYOK.
 
-### Updated Go function signatures
+### 3. New Go Types
 
 ```go
-// internal/db/llm_config.go
+// internal/db/modelserver_tokens.go (new file)
 
-type WorkspaceLLMConfig struct {
-    WorkspaceID string     `json:"workspace_id"`
-    BaseURL     string     `json:"base_url"`
-    APIKey      string     `json:"api_key"`
-    Models      []LLMModel `json:"models"`
-    Source      string     `json:"source"`         // "manual" or "modelserver"
-    SourceMeta  *json.RawMessage `json:"source_meta,omitempty"`
-    CreatedAt   time.Time  `json:"created_at"`
-    UpdatedAt   time.Time  `json:"updated_at"`
+type ModelserverConnection struct {
+    WorkspaceID    string          `json:"workspace_id"`
+    ProjectID      string          `json:"project_id"`
+    ProjectName    string          `json:"project_name"`
+    UserID         string          `json:"user_id"`
+    AccessToken    string          `json:"-"`
+    RefreshToken   string          `json:"-"`
+    TokenExpiresAt time.Time       `json:"token_expires_at"`
+    Models         []LLMModel      `json:"models"`
+    CreatedAt      time.Time       `json:"created_at"`
+    UpdatedAt      time.Time       `json:"updated_at"`
 }
 
-// Updated to include source fields
-func (db *DB) SetWorkspaceLLMConfig(
-    workspaceID, baseURL, apiKey string,
-    models []LLMModel,
-    source string,
-    sourceMeta json.RawMessage,
-) error
-
-// GetWorkspaceLLMConfig returns the full config including source fields
-func (db *DB) GetWorkspaceLLMConfig(workspaceID string) (*WorkspaceLLMConfig, error)
+func (db *DB) GetModelserverConnection(workspaceID string) (*ModelserverConnection, error)
+func (db *DB) SetModelserverConnection(c *ModelserverConnection) error  // upsert
+func (db *DB) DeleteModelserverConnection(workspaceID string) error
+func (db *DB) UpdateModelserverTokens(workspaceID, accessToken, refreshToken string, expiresAt time.Time) error
 ```
 
-The existing manual BYOK handler (`handleSetWorkspaceLLMConfig`) calls `SetWorkspaceLLMConfig` with `source="manual"` and `sourceMeta=nil`.
+### 4. New Backend Endpoints
 
-### 4. API Response Changes
+**`GET /api/workspaces/{id}/modelserver/connect`**
+- Requires: owner/maintainer role
+- State: random 32-byte hex → cookie `modelserver-oauth-state` (10-min, HttpOnly, Secure, SameSite=Lax)
+- Workspace ID: cookie `modelserver-oauth-wsid` (same flags)
+- PKCE: generate `code_verifier` → cookie `modelserver-oauth-pkce`, compute `code_challenge` (S256)
+- 302 → `MODELSERVER_OAUTH_AUTH_URL?client_id=...&redirect_uri=...&state=...&scope=project:llm offline_access&response_type=code&code_challenge=...&code_challenge_method=S256`
 
-`GET /api/workspaces/{id}/llm-config` response adds:
+**`GET /api/auth/modelserver/callback`**
+- Query: `code`, `state`
+- Processing:
+  1. Validate `state` vs cookie, extract `workspace_id` and `code_verifier`, clear cookies
+  2. Verify user has owner/maintainer role on workspace
+  3. Exchange code: `POST MODELSERVER_OAUTH_TOKEN_URL` with `{grant_type: authorization_code, code, client_id, client_secret, redirect_uri, code_verifier}` → `{access_token, refresh_token, expires_in}` (timeout 10s)
+  4. Extract `project_id`, `project_name`, `user_id` from access_token via Hydra token introspection: `POST MODELSERVER_OAUTH_INTROSPECT_URL` with `{token: access_token}` → response `ext` field contains `{project_id, project_name, user_id}`. (Use introspection rather than local JWT decode to stay consistent with modelserver proxy's validation approach and ensure revoked tokens are rejected.)
+  5. Fetch models: `GET MODELSERVER_PROXY_URL/v1/models` with `Authorization: Bearer <access_token>` → `{data: ["model-a", ...]}` (timeout 10s, empty list on failure)
+  6. Transform models: `string[] → []LLMModel` — `LLMModel{ID: s, Name: s}` for each
+  7. If workspace has existing BYOK config (`workspace_llm_config`), delete it (modelserver connection supersedes manual BYOK)
+  8. Upsert `workspace_modelserver_tokens`: `{workspace_id, project_id, project_name, user_id, access_token, refresh_token, token_expires_at, models}`
+  9. 302 → `/workspaces/{id}?tab=settings&modelserver=connected`
+- Error: 302 → `/workspaces/{id}?tab=settings&modelserver=error&message=<urlencoded>`
+
+**`DELETE /api/workspaces/{id}/modelserver/disconnect`**
+- Requires: owner/maintainer role
+- Delete `workspace_modelserver_tokens` row
+- Return 204
+
+**`GET /api/workspaces/{id}/modelserver/status`**
+- Requires: workspace member
+- Returns connection status:
 ```json
 {
-  "configured": true,
-  "base_url": "https://code.ai.cs.ac.cn",
-  "api_key": "ms-...XXXX",
-  "models": [...],
-  "source": "modelserver",
-  "source_meta": {
-    "project_id": "...",
-    "project_name": "My Project"
-  },
-  "updated_at": "..."
+  "connected": true,
+  "project_id": "...",
+  "project_name": "My Project",
+  "models": [{"id": "claude-sonnet-4-20250514", "name": "claude-sonnet-4-20250514"}, ...],
+  "connected_at": "..."
+}
+```
+Or `{"connected": false}` if no connection.
+
+### 5. llmproxy Changes
+
+The llmproxy (:8081) needs to detect modelserver-connected workspaces and forward accordingly.
+
+**Extended internal validation:** The existing `POST /internal/validate-proxy-token` response adds a field:
+
+```json
+{
+  "sandbox_id": "...",
+  "workspace_id": "...",
+  "status": "running",
+  "modelserver_upstream_url": "https://code.ai.cs.ac.cn"
 }
 ```
 
-### 5. Frontend Changes (WorkspaceDetail.tsx SettingsTab)
+`modelserver_upstream_url` is present (non-empty) only if the workspace has a modelserver connection. The workspace_id for token fetching is already available from the top-level field.
 
-**New "Connect to ModelServer" section:**
+**New internal endpoint:** `GET /internal/workspaces/{id}/modelserver-token`
+- Returns the current access_token for the workspace, refreshing it if expired
+- Response: `{"access_token": "...", "expires_at": "..."}`
+- Called by llmproxy when it needs to forward a request
+- llmproxy caches the token with short TTL (e.g., 5 minutes or until `expires_at`)
 
-When `!configured` or `source === "manual"`:
-- Show existing manual BYOK configuration UI
-- Add a divider: "Or connect to ModelServer"
-- "Connect to ModelServer" button → navigates to `GET /api/workspaces/{id}/modelserver/connect`
+**llmproxy forwarding logic — refactoring `handleAnthropicProxy`:**
 
-When `source === "modelserver"`:
+The current handler creates a static `httputil.ReverseProxy` targeting Anthropic. This needs to become a **per-request dynamic target selection**:
+
+```go
+func (s *Server) handleAnthropicProxy(w http.ResponseWriter, r *http.Request) {
+    // ... read body, extract trace, validate proxy_token (existing) ...
+    sbx, err := s.ValidateProxyToken(r.Context(), proxyToken)
+
+    // Determine upstream target
+    var targetURL string
+    var authHeader string
+    if sbx.ModelserverUpstreamURL != "" {
+        // Modelserver path: get fresh access_token, forward to modelserver
+        token, err := s.getModelserverToken(sbx.WorkspaceID)
+        targetURL = sbx.ModelserverUpstreamURL
+        authHeader = "Bearer " + token
+    } else {
+        // Anthropic path (existing)
+        targetURL = s.config.AnthropicBaseURL
+        authHeader = ""  // use x-api-key with AnthropicAPIKey
+    }
+
+    proxy := &httputil.ReverseProxy{
+        Director: func(req *http.Request) {
+            target, _ := url.Parse(targetURL)
+            req.URL.Scheme = target.Scheme
+            req.URL.Host = target.Host
+            req.Host = target.Host
+            if authHeader != "" {
+                req.Header.Del("x-api-key")
+                req.Header.Set("Authorization", authHeader)
+            } else {
+                // existing Anthropic auth injection
+                req.Header.Set("x-api-key", s.config.AnthropicAPIKey)
+            }
+        },
+        // ... ModifyResponse, FlushInterval (existing) ...
+    }
+    proxy.ServeHTTP(w, r)
+}
+```
+
+**Usage tracking:** llmproxy continues to record usage for modelserver-forwarded requests (for agentserver's own analytics), but **skips RPD quota enforcement** for modelserver-connected workspaces — quota is managed by modelserver's credit system.
+
+```go
+// In RPD check:
+if sbx.ModelserverUpstreamURL != "" {
+    // Skip RPD quota — modelserver manages its own rate limiting
+} else {
+    // Existing RPD check for Anthropic path
+}
+```
+
+**Token caching in llmproxy:** `getModelserverToken` caches access_tokens keyed by workspace_id with TTL = min(5 minutes, token_expires_at - now). Uses `sync.Map` or similar. On cache miss, calls agentserver `GET /internal/workspaces/{id}/modelserver-token`.
+
+### 6. Token Refresh
+
+agentserver implements a helper used by both the callback and the internal token endpoint. Uses `singleflight.Group` to prevent concurrent refresh storms when multiple llmproxy requests hit an expired token simultaneously:
+
+```go
+var tokenRefreshGroup singleflight.Group
+
+func (s *Server) getValidModelserverToken(workspaceID string) (string, error) {
+    conn, err := s.DB.GetModelserverConnection(workspaceID)
+    if err != nil || conn == nil {
+        return "", fmt.Errorf("no modelserver connection")
+    }
+
+    // Return if still valid (with 60s buffer)
+    if time.Now().Before(conn.TokenExpiresAt.Add(-60 * time.Second)) {
+        return conn.AccessToken, nil
+    }
+
+    // Refresh via singleflight to deduplicate concurrent refresh attempts
+    result, err, _ := tokenRefreshGroup.Do(workspaceID, func() (interface{}, error) {
+        // Re-check after acquiring the flight (another goroutine may have refreshed)
+        conn, err := s.DB.GetModelserverConnection(workspaceID)
+        if err != nil || conn == nil {
+            return nil, fmt.Errorf("no modelserver connection")
+        }
+        if time.Now().Before(conn.TokenExpiresAt.Add(-60 * time.Second)) {
+            return conn.AccessToken, nil
+        }
+
+        resp, err := refreshHydraToken(s.modelserverOAuthConfig, conn.RefreshToken)
+        if err != nil {
+            return nil, fmt.Errorf("refresh failed: %w", err)
+        }
+
+        expiresAt := time.Now().Add(time.Duration(resp.ExpiresIn) * time.Second)
+        s.DB.UpdateModelserverTokens(workspaceID, resp.AccessToken, resp.RefreshToken, expiresAt)
+        return resp.AccessToken, nil
+    })
+    if err != nil {
+        return "", err
+    }
+    return result.(string), nil
+}
+```
+
+**Refresh failures:** If the refresh_token itself is expired (Hydra default: 30 days) or revoked, `getValidModelserverToken` returns an error. The llmproxy returns 502 to the sandbox. The user needs to re-authorize (click "Reconnect" in settings).
+
+### 7. Sandbox Creation Changes
+
+In `handlePostSandbox` (server.go), after the existing BYOK check, add modelserver connection check:
+
+```go
+llmConfig, _ := s.DB.GetWorkspaceLLMConfig(wsID)
+msConn, _ := s.DB.GetModelserverConnection(wsID)
+
+if msConn != nil {
+    // Modelserver connection — sandbox uses llmproxy (no BYOK injection)
+    // The llmproxy will forward to modelserver using the access_token
+    // No BYOKBaseURL/BYOKAPIKey set → sandbox routes through llmproxy
+} else if llmConfig != nil {
+    // Manual BYOK — inject directly (existing behavior)
+    opts.BYOKBaseURL = llmConfig.BaseURL
+    opts.BYOKAPIKey = llmConfig.APIKey
+    opts.BYOKModels = convertModels(llmConfig.Models)
+}
+// else: platform default via llmproxy
+```
+
+**Priority:** modelserver connection > manual BYOK > platform default.
+
+**OpenClaw model list:** Currently `container/manager.go` only populates `cfgModels` inside the `if opts.BYOKBaseURL != ""` block. For modelserver connections (no BYOK), the models aren't injected into the OpenClaw config, so it falls back to default models. This needs a small refactor in `container/manager.go`:
+
+```go
+// Before:
+var cfgModels []process.LLMModel
+if opts.BYOKBaseURL != "" {
+    cfgModels = opts.BYOKModels
+}
+
+// After: check CustomModels independently of BYOKBaseURL
+var cfgModels []process.LLMModel
+if opts.BYOKBaseURL != "" {
+    cfgModels = opts.BYOKModels
+} else if len(opts.CustomModels) > 0 {
+    cfgModels = opts.CustomModels
+}
+```
+
+Add `CustomModels []LLMModel` to `process.StartOptions` (used when modelserver connection provides models but sandbox still routes through llmproxy). In `handlePostSandbox`, set `opts.CustomModels = msConn.Models` when modelserver is connected.
+
+For OpenCode sandboxes this is not needed — OpenCode discovers models dynamically via `GET /v1/models` through the llmproxy, which will forward to modelserver.
+
+### 8. Frontend Changes (WorkspaceDetail.tsx SettingsTab)
+
+**Add modelserver connection section above the BYOK section:**
+
+When modelserver is connected (`status.connected === true`):
 - Show: "Connected to ModelServer project: **{project_name}**"
-- Show: masked API key, model list (same as current BYOK display)
-- "Reconnect" button → re-initiates OAuth flow
-- "Disconnect" button → calls DELETE /api/workspaces/{id}/llm-config
+- Show: model list as badges
+- "Reconnect" button → `window.location.href = /api/workspaces/{id}/modelserver/connect`
+- "Disconnect" button → `DELETE /api/workspaces/{id}/modelserver/disconnect`, reload
+
+When modelserver is not connected:
+- Show "Connect to ModelServer" button → `window.location.href = /api/workspaces/{id}/modelserver/connect`
+
+Below that, show manual BYOK section (existing UI). If modelserver is connected, show a note: "Manual BYOK configuration is overridden by the ModelServer connection."
 
 **URL parameter handling:**
-- On mount, check for `?modelserver=connected` → show success toast
-- Check for `?modelserver=error&message=...` → show error toast
+- On mount, check `?modelserver=connected` → success toast, clean URL
+- Check `?modelserver=error&message=...` → error toast, clean URL
 
-### 6. API Client (api.ts)
-
-No new API client methods needed for the OAuth flow (it's all server-side redirects via `window.location.href`, not fetch calls — the browser leaves the SPA and returns via the final redirect at step 20, which the SPA router handles).
-
-The existing `getWorkspaceLLMConfig` and `deleteWorkspaceLLMConfig` remain unchanged. The response type adds:
-
+**New API calls:**
 ```typescript
-interface WorkspaceLLMConfig {
-  configured: boolean
-  base_url?: string
-  api_key?: string
+export async function getModelserverStatus(workspaceId: string): Promise<ModelserverStatus> {
+  const res = await fetch(`/api/workspaces/${workspaceId}/modelserver/status`)
+  return res.json()
+}
+
+export async function disconnectModelserver(workspaceId: string): Promise<void> {
+  await fetch(`/api/workspaces/${workspaceId}/modelserver/disconnect`, { method: 'DELETE' })
+}
+
+interface ModelserverStatus {
+  connected: boolean
+  project_id?: string
+  project_name?: string
   models?: LLMModel[]
-  source?: string          // "manual" | "modelserver"
-  source_meta?: {
-    project_id?: string
-    project_name?: string
-    key_id?: string
-  }
-  updated_at?: string
+  connected_at?: string
 }
 ```
 
@@ -423,30 +550,32 @@ interface WorkspaceLLMConfig {
 
 | Scenario | Behavior |
 |----------|----------|
-| User cancels OAuth flow | Hydra redirects with `error=access_denied` → agentserver shows "Authorization cancelled" |
+| User cancels OAuth | Hydra redirects with `error=access_denied` → agentserver shows "Authorization cancelled" |
 | Code exchange fails | Redirect to settings with error message |
-| Key info retrieval fails | Redirect to settings with error message |
-| Models fetch fails | Save config with empty models list, show warning |
-| API key revoked later | Sandbox LLM calls fail at runtime; user sees errors and can reconnect |
-| Project suspended | Same as above — runtime failure, user reconnects with different project |
-| Re-authorization | New API key replaces old one in workspace_llm_config; agentserver attempts best-effort revocation of old key via modelserver API (using old key_id from source_meta). If revocation fails, old key remains (user can clean up manually via modelserver UI). |
-| Concurrent OAuth flows | Last one wins (upsert semantics in SetWorkspaceLLMConfig) |
+| Models fetch fails | Store connection with empty models (non-fatal) |
+| Access token expired during LLM call | llmproxy fetches a refreshed token before forwarding (60s buffer makes mid-flight expiry near-impossible; if modelserver returns 401, error propagates to sandbox) |
+| Refresh token expired | llmproxy returns 502; user must click "Reconnect" |
+| Project suspended on modelserver | modelserver proxy rejects request; sandbox sees error |
+| Re-authorization (reconnect) | New tokens replace old; no key cleanup needed |
+| Disconnect | Delete stored tokens; sandbox LLM calls fall back to platform default |
+| Concurrent OAuth flows | Last one wins (upsert) |
 
 ## Security Considerations
 
-1. **API key never in browser**: The API key plaintext only travels server-to-server (steps 15-16 in the flow). The authorization code in the URL is a one-time-use short-lived token.
-2. **State parameter**: Random hex value stored in cookie, compared on callback — follows the same pattern as existing OIDC implementation in agentserver. Workspace ID stored in a separate cookie (not in the state URL parameter).
-3. **PKCE (RFC 7636)**: Used even though agentserver is a confidential client, as defense-in-depth against authorization code interception. S256 challenge method.
-4. **Client secret**: Stored only in agentserver backend config, never exposed to frontend.
-5. **Key info endpoint**: One-time retrieval with 5-minute TTL prevents replay.
-6. **Scope limitation**: OAuth scope `project:apikey` limits what the authorization grants.
-7. **Role checks**: Only workspace owner/maintainer can initiate the connect flow.
-8. **Consent not remembered**: Hydra consent is set to `remember: false` so users always see the project selection screen, preventing unintended project binding.
-9. **API key at rest**: Stored in plaintext in `workspace_llm_config` (consistent with existing manual BYOK behavior). Future improvement: encrypt at rest.
+1. **No credentials in sandbox**: sandbox has no modelserver tokens. LLM traffic routes through llmproxy which holds and refreshes the access_token server-side.
+2. **State parameter**: Random hex in cookie, matches existing OIDC pattern (`internal/auth/oidc.go`).
+3. **PKCE (RFC 7636)**: S256 code challenge, defense-in-depth.
+4. **Scoped tokens**: Access token scoped to one project (`ext.project_id`); modelserver proxy rejects access to other projects.
+5. **Token introspection**: modelserver validates Hydra tokens via admin introspection (not local JWT decode), ensuring revoked tokens are rejected.
+6. **Short-lived access tokens**: Hydra access tokens are short-lived (configurable). Refresh handled transparently.
+7. **Consent not remembered**: `remember: false` ensures project selection every time.
+8. **Token storage**: Access/refresh tokens stored in agentserver DB (plaintext, consistent with existing patterns). Future: encrypt at rest.
+9. **Internal token endpoint**: `/internal/workspaces/{id}/modelserver-token` is on the internal-only route group, not externally accessible.
 
 ## Testing Plan
 
-1. **Unit tests**: State encryption/decryption, callback parameter validation, config storage
-2. **Integration tests**: Full OAuth flow with mock Hydra responses
-3. **E2E tests**: Complete browser flow (agentserver → Hydra → modelserver login → project select → callback → config saved)
-4. **Error cases**: Invalid state, expired code, revoked key, network failures
+1. **Unit tests**: State/PKCE generation, token refresh logic, model format transform, DB CRUD
+2. **Integration tests (agentserver)**: Callback flow with mock Hydra; llmproxy forwarding with mock modelserver; token refresh cycle
+3. **Integration tests (modelserver)**: Login/consent providers with mock Hydra admin; proxy dual-auth (API key + Hydra token); rate limiting with Hydra-authed requests
+4. **E2E**: Browser flow → connection established → sandbox LLM call routes through modelserver → token refresh mid-session → disconnect
+5. **Error cases**: Expired refresh token, revoked token, modelserver down, concurrent reconnects
