@@ -44,6 +44,15 @@ type Server struct {
 	OpenclawSubdomainPrefix  string // e.g. "claw" — subdomain: claw-{id}.{baseDomain}
 	PasswordAuthEnabled      bool   // when false, /api/auth/login and /api/auth/register are not registered
 	LLMProxyURL              string // base URL for the llmproxy service (e.g. "http://agentserver-llmproxy:8081")
+
+	// ModelServer OAuth
+	ModelserverOAuthClientID      string
+	ModelserverOAuthClientSecret  string
+	ModelserverOAuthAuthURL       string
+	ModelserverOAuthTokenURL      string
+	ModelserverOAuthIntrospectURL string
+	ModelserverOAuthRedirectURI   string
+	ModelserverProxyURL           string
 }
 
 func New(a *auth.Auth, oidcMgr *auth.OIDCManager, database *db.DB, sandboxStore *sbxstore.Store, processManager process.Manager, driveManager storage.DriveManager, nsMgr *namespace.Manager, tunnelReg *tunnel.Registry, staticFS fs.FS, passwordAuthEnabled bool) *Server {
@@ -175,6 +184,12 @@ func (s *Server) Router() http.Handler {
 		r.Get("/api/workspaces/{id}/llm-config", s.handleGetWorkspaceLLMConfig)
 		r.Put("/api/workspaces/{id}/llm-config", s.handleSetWorkspaceLLMConfig)
 		r.Delete("/api/workspaces/{id}/llm-config", s.handleDeleteWorkspaceLLMConfig)
+
+		// ModelServer OAuth
+		r.Get("/api/workspaces/{id}/modelserver/connect", s.handleModelserverConnect)
+		r.Delete("/api/workspaces/{id}/modelserver/disconnect", s.handleModelserverDisconnect)
+		r.Get("/api/workspaces/{id}/modelserver/status", s.handleModelserverStatus)
+		r.Get("/api/auth/modelserver/callback", s.handleModelserverCallback)
 
 		// Sandbox routes
 		r.Get("/api/workspaces/{wid}/sandboxes", s.handleListSandboxes)
