@@ -15,6 +15,12 @@ export interface WorkspaceMember {
   picture?: string
 }
 
+export interface WeixinBinding {
+  bot_id: string
+  user_id: string
+  bound_at: string
+}
+
 export interface Sandbox {
   id: string
   workspace_id: string
@@ -32,6 +38,7 @@ export interface Sandbox {
   memory?: number
   idle_timeout?: number
   agent_info?: AgentInfo
+  weixin_bindings?: WeixinBinding[]
 }
 
 export interface AgentInfo {
@@ -213,6 +220,44 @@ export async function getWorkspaceLLMQuota(workspaceId: string): Promise<Workspa
   const res = await fetch(`/api/workspaces/${workspaceId}/llm-quota`)
   if (!res.ok) throw new Error('Failed to get LLM quota')
   return res.json()
+}
+
+// Workspace BYOK LLM config
+
+export interface LLMModel {
+  id: string
+  name: string
+}
+
+export interface WorkspaceLLMConfig {
+  configured: boolean
+  base_url?: string
+  api_key?: string
+  models?: LLMModel[]
+  updated_at?: string
+}
+
+export async function getWorkspaceLLMConfig(workspaceId: string): Promise<WorkspaceLLMConfig> {
+  const res = await fetch(`/api/workspaces/${workspaceId}/llm-config`)
+  if (!res.ok) throw new Error('Failed to get LLM config')
+  return res.json()
+}
+
+export async function setWorkspaceLLMConfig(
+  workspaceId: string,
+  config: { base_url: string; api_key: string; models: LLMModel[] }
+): Promise<void> {
+  const res = await fetch(`/api/workspaces/${workspaceId}/llm-config`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(config),
+  })
+  if (!res.ok) throw new Error('Failed to set LLM config')
+}
+
+export async function deleteWorkspaceLLMConfig(workspaceId: string): Promise<void> {
+  const res = await fetch(`/api/workspaces/${workspaceId}/llm-config`, { method: 'DELETE' })
+  if (!res.ok) throw new Error('Failed to delete LLM config')
 }
 
 export async function listSandboxes(workspaceId: string): Promise<Sandbox[]> {

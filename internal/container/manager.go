@@ -159,8 +159,13 @@ func (m *Manager) EnsureContainer(id string, opts process.StartOptions) (string,
 		if opts.OpencodeToken != "" {
 			containerEnv = append(containerEnv, "OPENCODE_SERVER_PASSWORD="+opts.OpencodeToken)
 		}
-		// Merge proxy provider config into OPENCODE_CONFIG_CONTENT.
-		opcodeConfig := sandbox.BuildOpencodeConfig(m.cfg.OpencodeConfigContent, opts.ProxyToken)
+		// Merge LLM provider config into OPENCODE_CONFIG_CONTENT.
+		apiKey, overrideURL := opts.ProxyToken, ""
+		if opts.BYOKBaseURL != "" {
+			apiKey = opts.BYOKAPIKey
+			overrideURL = opts.BYOKBaseURL
+		}
+		opcodeConfig := sandbox.BuildOpencodeConfig(m.cfg.OpencodeConfigContent, apiKey, overrideURL)
 		containerEnv = append(containerEnv, "OPENCODE_CONFIG_CONTENT="+opcodeConfig)
 	}
 
@@ -197,7 +202,14 @@ func (m *Manager) EnsureContainer(id string, opts process.StartOptions) (string,
 	}
 	if opts.SandboxType == "openclaw" {
 		proxyBaseURL := sandbox.ExtractProxyBaseURL(m.cfg.OpencodeConfigContent)
-		openclawCfg := sandbox.BuildOpenclawConfig(proxyBaseURL, opts.ProxyToken, opts.OpenclawToken, m.cfg.OpenclawWeixinEnabled)
+		cfgBaseURL, cfgAPIKey := proxyBaseURL, opts.ProxyToken
+		var cfgModels []process.LLMModel
+		if opts.BYOKBaseURL != "" {
+			cfgBaseURL = opts.BYOKBaseURL
+			cfgAPIKey = opts.BYOKAPIKey
+			cfgModels = opts.BYOKModels
+		}
+		openclawCfg := sandbox.BuildOpenclawConfig(cfgBaseURL, cfgAPIKey, opts.OpenclawToken, m.cfg.OpenclawWeixinEnabled, cfgModels)
 		containerConfig.Cmd = []string{"sh", "-c", `mkdir -p ~/.openclaw && cat > ~/.openclaw/openclaw.json << 'CFGEOF'
 ` + openclawCfg + `
 CFGEOF

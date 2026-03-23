@@ -14,6 +14,12 @@ type VolumeMount struct {
 	MountPath string // container mount path
 }
 
+// LLMModel describes a model available to a sandbox.
+type LLMModel struct {
+	ID   string
+	Name string
+}
+
 // StartOptions holds optional parameters for starting a process.
 type StartOptions struct {
 	Namespace        string        // K8s namespace to create sandbox in
@@ -24,6 +30,9 @@ type StartOptions struct {
 	OpenclawToken    string        // openclaw only: gateway auth token
 	CPU              int           // CPU limit in millicores (e.g. 2000 = 2 cores)
 	Memory           int64         // memory limit in bytes (e.g. 2147483648 = 2Gi)
+	BYOKBaseURL      string        // BYOK: user's LLM provider base URL (non-empty enables BYOK)
+	BYOKAPIKey       string        // BYOK: user's LLM provider API key
+	BYOKModels       []LLMModel    // BYOK: user's custom model list
 }
 
 // Manager manages process lifecycles.

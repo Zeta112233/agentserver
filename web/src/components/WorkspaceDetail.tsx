@@ -9,6 +9,10 @@ import {
   X,
   MessageSquare,
   Pencil,
+  Settings,
+  Plus,
+  Minus,
+  Key,
 } from 'lucide-react'
 import {
   listMembers,
@@ -18,17 +22,22 @@ import {
   getWorkspaceLLMQuota,
   getWorkspaceTraces,
   getWorkspaceTraceDetail,
+  getWorkspaceLLMConfig,
+  setWorkspaceLLMConfig,
+  deleteWorkspaceLLMConfig,
   renameWorkspace,
   type Workspace,
   type WorkspaceMember,
   type WorkspaceSandboxDefaults,
   type WorkspaceLLMQuota,
+  type WorkspaceLLMConfig,
+  type LLMModel,
   type TraceItem,
 } from '../lib/api'
 import { ConfirmModal } from './Modals'
 import { TracesTab, TRACES_PER_PAGE } from './SandboxDetail'
 
-type Tab = 'overview' | 'members' | 'traces'
+type Tab = 'overview' | 'members' | 'traces' | 'settings'
 
 interface WorkspaceDetailProps {
   workspace: Workspace
@@ -84,6 +93,7 @@ export function WorkspaceDetail({ workspace, onRename }: WorkspaceDetailProps) {
     { key: 'overview', label: 'Overview', icon: <LayoutDashboard size={15} /> },
     { key: 'members', label: 'Members', icon: <Users size={15} /> },
     { key: 'traces', label: 'Traces', icon: <MessageSquare size={15} /> },
+    { key: 'settings', label: 'Settings', icon: <Settings size={15} /> },
   ]
 
   return (
@@ -186,6 +196,9 @@ export function WorkspaceDetail({ workspace, onRename }: WorkspaceDetailProps) {
             fetchDetail={fetchDetail}
             showSandboxId
           />
+        )}
+        {tab === 'settings' && (
+          <SettingsTab workspaceId={workspace.id} />
         )}
       </div>
     </div>
@@ -375,6 +388,207 @@ function MembersTab({ workspaceId, members, setMembers }: {
           destructive
           onConfirm={() => doRemove(confirmRemove.user_id)}
           onCancel={() => setConfirmRemove(null)}
+        />
+      )}
+    </div>
+  )
+}
+
+function SettingsTab({ workspaceId }: { workspaceId: string }) {
+  const [config, setConfig] = useState<WorkspaceLLMConfig | null>(null)
+  const [editMode, setEditMode] = useState(false)
+  const [baseUrl, setBaseUrl] = useState('')
+  const [apiKey, setApiKey] = useState('')
+  const [models, setModels] = useState<LLMModel[]>([{ id: '', name: '' }])
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+
+  const load = useCallback(() => {
+    getWorkspaceLLMConfig(workspaceId).then(setConfig).catch(() => {})
+  }, [workspaceId])
+
+  useEffect(() => { load() }, [load])
+
+  const startEdit = () => {
+    if (config?.configured) {
+      setBaseUrl(config.base_url || '')
+      setApiKey('')
+      setModels(config.models && config.models.length > 0 ? [...config.models] : [{ id: '', name: '' }])
+    } else {
+      setBaseUrl('')
+      setApiKey('')
+      setModels([{ id: '', name: '' }])
+    }
+    setError(null)
+    setEditMode(true)
+  }
+
+  const handleSave = async () => {
+    const validModels = models.filter(m => m.id.trim() && m.name.trim())
+    if (!baseUrl.trim()) {
+      setError('Base URL is required')
+      return
+    }
+    if (!apiKey.trim() && !config?.configured) {
+      setError('API Key is required')
+      return
+    }
+    if (validModels.length === 0) {
+      setError('At least one model with ID and name is required')
+      return
+    }
+    setSaving(true)
+    setError(null)
+    try {
+      await setWorkspaceLLMConfig(workspaceId, {
+        base_url: baseUrl.trim(),
+        api_key: apiKey.trim(), // empty string = keep existing key on server
+        models: validModels.map(m => ({ id: m.id.trim(), name: m.name.trim() })),
+      })
+      setEditMode(false)
+      load()
+    } catch {
+      setError('Failed to save configuration')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleDelete = async () => {
+    setConfirmDelete(false)
+    try {
+      await deleteWorkspaceLLMConfig(workspaceId)
+      setEditMode(false)
+      load()
+    } catch { /* ignore */ }
+  }
+
+  const addModel = () => setModels([...models, { id: '', name: '' }])
+  const removeModel = (i: number) => setModels(models.filter((_, idx) => idx !== i))
+  const updateModel = (i: number, field: 'id' | 'name', value: string) => {
+    const next = [...models]
+    next[i] = { ...next[i], [field]: value }
+    setModels(next)
+  }
+
+  const inputCls = 'w-full rounded-md border border-[var(--border)] bg-[var(--background)] px-3 py-1.5 text-sm text-[var(--foreground)] outline-none focus:border-[var(--primary)]'
+
+  if (!config) return null
+
+  if (editMode) {
+    return (
+      <div className="max-w-2xl">
+        <div className="rounded-lg border border-[var(--border)] bg-[var(--card)] p-5">
+          <h3 className="text-sm font-medium text-[var(--foreground)] mb-4">LLM Provider Configuration</h3>
+
+          <div className="flex flex-col gap-4">
+            <div>
+              <label className="text-xs text-[var(--muted-foreground)] mb-1 block">Base URL</label>
+              <input type="text" value={baseUrl} onChange={e => setBaseUrl(e.target.value)} placeholder="https://api.anthropic.com" className={inputCls} />
+            </div>
+            <div>
+              <label className="text-xs text-[var(--muted-foreground)] mb-1 block">API Key</label>
+              <input type="password" value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder={config.configured ? 'Leave empty to keep current key' : 'sk-...'} className={inputCls} />
+            </div>
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-xs text-[var(--muted-foreground)]">Models</label>
+                <button onClick={addModel} className="inline-flex items-center gap-1 text-xs text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
+                  <Plus size={12} /> Add
+                </button>
+              </div>
+              <div className="flex flex-col gap-2">
+                {models.map((m, i) => (
+                  <div key={i} className="flex gap-2 items-center">
+                    <input type="text" value={m.id} onChange={e => updateModel(i, 'id', e.target.value)} placeholder="Model ID" className={inputCls} />
+                    <input type="text" value={m.name} onChange={e => updateModel(i, 'name', e.target.value)} placeholder="Display Name" className={inputCls} />
+                    {models.length > 1 && (
+                      <button onClick={() => removeModel(i)} className="shrink-0 rounded p-1 text-[var(--muted-foreground)] hover:text-red-400">
+                        <Minus size={14} />
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {error && <p className="text-xs text-red-400">{error}</p>}
+
+            <div className="flex gap-2 justify-end pt-2">
+              <button onClick={() => setEditMode(false)} className="rounded-md border border-[var(--border)] bg-[var(--card)] px-4 py-1.5 text-xs font-medium text-[var(--foreground)] hover:bg-[var(--secondary)]">
+                Cancel
+              </button>
+              <button onClick={handleSave} disabled={saving} className="rounded-md bg-[var(--primary)] px-4 py-1.5 text-xs font-medium text-[var(--primary-foreground)] hover:opacity-90 disabled:opacity-50">
+                {saving ? 'Saving...' : 'Save'}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="max-w-2xl">
+      <div className="rounded-lg border border-[var(--border)] bg-[var(--card)]">
+        <div className="flex items-center justify-between border-b border-[var(--border)] px-5 py-3">
+          <div className="flex items-center gap-2">
+            <Key size={14} className="text-[var(--muted-foreground)]" />
+            <span className="text-sm font-medium text-[var(--foreground)]">LLM Provider</span>
+          </div>
+          <div className="flex gap-2">
+            <button onClick={startEdit} className="rounded-md border border-[var(--border)] bg-[var(--card)] px-3 py-1 text-xs font-medium text-[var(--foreground)] hover:bg-[var(--secondary)]">
+              {config.configured ? 'Edit' : 'Configure'}
+            </button>
+            {config.configured && (
+              <button onClick={() => setConfirmDelete(true)} className="rounded-md border border-red-500/20 bg-red-500/10 px-3 py-1 text-xs font-medium text-red-400 hover:bg-red-500/20">
+                Remove
+              </button>
+            )}
+          </div>
+        </div>
+        <div className="px-5 py-4">
+          {config.configured ? (
+            <div className="flex flex-col gap-2 text-sm">
+              <div className="flex justify-between">
+                <span className="text-[var(--muted-foreground)]">Base URL</span>
+                <span className="text-[var(--foreground)] font-mono text-xs">{config.base_url}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-[var(--muted-foreground)]">API Key</span>
+                <span className="text-[var(--foreground)] font-mono text-xs">{config.api_key}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-[var(--muted-foreground)]">Models</span>
+                <span className="text-[var(--foreground)]">{config.models?.length || 0} configured</span>
+              </div>
+              {config.models && config.models.length > 0 && (
+                <div className="mt-1 flex flex-wrap gap-1.5">
+                  {config.models.map(m => (
+                    <span key={m.id} className="rounded-full border border-[var(--border)] bg-[var(--secondary)] px-2.5 py-0.5 text-[10px] font-medium text-[var(--muted-foreground)]">
+                      {m.name}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="text-sm text-[var(--muted-foreground)]">
+              Using platform default (LLM Proxy). Configure your own API key to connect sandboxes directly to your LLM provider.
+            </div>
+          )}
+        </div>
+      </div>
+
+      {confirmDelete && (
+        <ConfirmModal
+          title="Remove LLM Configuration"
+          message="Remove custom LLM configuration? New sandboxes will use the platform default."
+          confirmLabel="Remove"
+          destructive
+          onConfirm={handleDelete}
+          onCancel={() => setConfirmDelete(false)}
         />
       )}
     </div>

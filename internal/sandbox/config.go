@@ -3,6 +3,8 @@ package sandbox
 import (
 	"encoding/json"
 	"os"
+
+	"github.com/agentserver/agentserver/internal/process"
 )
 
 // Config holds configuration for the K8s sandbox backend.
@@ -45,10 +47,9 @@ func envOrDefault(key, def string) string {
 }
 
 // BuildOpencodeConfig merges the per-sandbox proxy token into the base opencode
-// config JSON. The proxyBaseURL is already expected to be in the base config
-// (provider.anthropic.options.baseURL). This function only injects the
-// per-sandbox apiKey.
-func BuildOpencodeConfig(baseConfig, proxyToken string) string {
+// config JSON. When overrideBaseURL is non-empty (BYOK mode), it also replaces
+// provider.anthropic.options.baseURL.
+func BuildOpencodeConfig(baseConfig, apiKey, overrideBaseURL string) string {
 	// Parse the user-provided base config (from OPENCODE_CONFIG_CONTENT / values.yaml).
 	var cfg map[string]interface{}
 	if baseConfig != "" {
@@ -60,7 +61,7 @@ func BuildOpencodeConfig(baseConfig, proxyToken string) string {
 	}
 
 	// Inject provider.anthropic.options.apiKey with per-sandbox token.
-	if proxyToken != "" {
+	if apiKey != "" {
 		provider, _ := cfg["provider"].(map[string]interface{})
 		if provider == nil {
 			provider = make(map[string]interface{})
@@ -73,7 +74,10 @@ func BuildOpencodeConfig(baseConfig, proxyToken string) string {
 		if options == nil {
 			options = make(map[string]interface{})
 		}
-		options["apiKey"] = proxyToken
+		options["apiKey"] = apiKey
+		if overrideBaseURL != "" {
+			options["baseURL"] = overrideBaseURL
+		}
 		anthropic["options"] = options
 		provider["anthropic"] = anthropic
 		cfg["provider"] = provider
@@ -115,7 +119,7 @@ func ExtractProxyBaseURL(configJSON string) string {
 // gateway.auth.token so that the gateway and Control UI share the same secret;
 // without this, OpenClaw v2026.3.12+ auto-generates a random token on startup
 // that won't match the token our proxy injects.
-func BuildOpenclawConfig(proxyBaseURL, proxyToken, gatewayToken string, weixinEnabled bool) string {
+func BuildOpenclawConfig(proxyBaseURL, proxyToken, gatewayToken string, weixinEnabled bool, customModels []process.LLMModel) string {
 	type modelDef struct {
 		ID   string `json:"id"`
 		Name string `json:"name"`
@@ -181,6 +185,19 @@ func BuildOpenclawConfig(proxyBaseURL, proxyToken, gatewayToken string, weixinEn
 	}
 
 	if proxyBaseURL != "" && proxyToken != "" {
+		models := []modelDef{
+			{ID: "claude-opus-4-6", Name: "Claude Opus 4.6"},
+			{ID: "claude-opus-4-5", Name: "Claude Opus 4.5"},
+			{ID: "claude-sonnet-4-6", Name: "Claude Sonnet 4.6"},
+			{ID: "claude-sonnet-4-5", Name: "Claude Sonnet 4.5"},
+			{ID: "claude-haiku-4-5", Name: "Claude Haiku 4.5"},
+		}
+		if len(customModels) > 0 {
+			models = make([]modelDef, len(customModels))
+			for i, m := range customModels {
+				models[i] = modelDef{ID: m.ID, Name: m.Name}
+			}
+		}
 		c.Models = &struct {
 			Providers map[string]provider `json:"providers"`
 		}{
@@ -189,13 +206,7 @@ func BuildOpenclawConfig(proxyBaseURL, proxyToken, gatewayToken string, weixinEn
 					BaseURL: proxyBaseURL,
 					APIKey:  proxyToken,
 					API:     "anthropic-messages",
-					Models: []modelDef{
-						{ID: "claude-opus-4-6", Name: "Claude Opus 4.6"},
-						{ID: "claude-opus-4-5", Name: "Claude Opus 4.5"},
-						{ID: "claude-sonnet-4-6", Name: "Claude Sonnet 4.6"},
-						{ID: "claude-sonnet-4-5", Name: "Claude Sonnet 4.5"},
-						{ID: "claude-haiku-4-5", Name: "Claude Haiku 4.5"},
-					},
+					Models:  models,
 				},
 			},
 		}

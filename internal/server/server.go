@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"time"
 
@@ -169,6 +170,11 @@ func (s *Server) Router() http.Handler {
 
 		// Workspace LLM quota (read-only for members)
 		r.Get("/api/workspaces/{id}/llm-quota", s.handleGetWorkspaceLLMQuota)
+
+		// Workspace BYOK LLM config (owner/maintainer only)
+		r.Get("/api/workspaces/{id}/llm-config", s.handleGetWorkspaceLLMConfig)
+		r.Put("/api/workspaces/{id}/llm-config", s.handleSetWorkspaceLLMConfig)
+		r.Delete("/api/workspaces/{id}/llm-config", s.handleDeleteWorkspaceLLMConfig)
 
 		// Sandbox routes
 		r.Get("/api/workspaces/{wid}/sandboxes", s.handleListSandboxes)
@@ -378,6 +384,12 @@ type agentInfoResponse struct {
 	UpdatedAt       string `json:"updated_at"`
 }
 
+type weixinBindingResponse struct {
+	BotID   string `json:"bot_id"`
+	UserID  string `json:"user_id"`
+	BoundAt string `json:"bound_at"`
+}
+
 type sandboxResponse struct {
 	ID              string  `json:"id"`
 	ShortID         string  `json:"short_id,omitempty"`
@@ -395,7 +407,8 @@ type sandboxResponse struct {
 	CPU             int     `json:"cpu,omitempty"`
 	Memory          int64   `json:"memory,omitempty"`
 	IdleTimeout     *int    `json:"idle_timeout,omitempty"`
-	AgentInfo       *agentInfoResponse `json:"agent_info,omitempty"`
+	AgentInfo       *agentInfoResponse   `json:"agent_info,omitempty"`
+	WeixinBindings  []weixinBindingResponse `json:"weixin_bindings,omitempty"`
 }
 
 func (s *Server) toWorkspaceResponse(ws *db.Workspace) workspaceResponse {
@@ -462,6 +475,17 @@ func (s *Server) toSandboxResponse(sbx *sbxstore.Sandbox, authToken string) sand
 				OpencodeVersion: ai.OpencodeVersion,
 				Workdir:         ai.Workdir,
 				UpdatedAt:       ai.UpdatedAt.Format(time.RFC3339),
+			}
+		}
+	}
+	if sbx.Type == "openclaw" {
+		if bindings, err := s.DB.ListWeixinBindings(sbx.ID); err == nil && len(bindings) > 0 {
+			for _, b := range bindings {
+				resp.WeixinBindings = append(resp.WeixinBindings, weixinBindingResponse{
+					BotID:   b.BotID,
+					UserID:  b.UserID,
+					BoundAt: b.BoundAt.Format(time.RFC3339),
+				})
 			}
 		}
 	}
@@ -846,6 +870,110 @@ func (s *Server) handleGetWorkspaceLLMQuota(w http.ResponseWriter, r *http.Reque
 	s.proxyLLMProxyRequest(w, http.MethodGet, "/internal/quotas/"+wsID, nil)
 }
 
+// --- Workspace BYOK LLM config handlers ---
+
+func maskAPIKey(key string) string {
+	if len(key) <= 8 {
+		return "****"
+	}
+	return key[:3] + "..." + key[len(key)-4:]
+}
+
+func (s *Server) handleGetWorkspaceLLMConfig(w http.ResponseWriter, r *http.Request) {
+	wsID := chi.URLParam(r, "id")
+	if !s.requireWorkspaceRole(w, r, wsID, "owner", "maintainer") {
+		return
+	}
+	cfg, err := s.DB.GetWorkspaceLLMConfig(wsID)
+	if err != nil {
+		log.Printf("failed to get workspace llm config: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if cfg == nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"configured": false})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"configured": true,
+		"base_url":   cfg.BaseURL,
+		"api_key":    maskAPIKey(cfg.APIKey),
+		"models":     cfg.Models,
+		"updated_at": cfg.UpdatedAt.Format(time.RFC3339),
+	})
+}
+
+func (s *Server) handleSetWorkspaceLLMConfig(w http.ResponseWriter, r *http.Request) {
+	wsID := chi.URLParam(r, "id")
+	if !s.requireWorkspaceRole(w, r, wsID, "owner", "maintainer") {
+		return
+	}
+	var req struct {
+		BaseURL string     `json:"base_url"`
+		APIKey  string     `json:"api_key"`
+		Models  []db.LLMModel `json:"models"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.BaseURL == "" {
+		http.Error(w, "base_url is required", http.StatusBadRequest)
+		return
+	}
+	u, err := url.Parse(req.BaseURL)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		http.Error(w, "base_url must be a valid http or https URL", http.StatusBadRequest)
+		return
+	}
+	// Allow partial update: if api_key is omitted, retain the existing key.
+	if req.APIKey == "" {
+		existing, _ := s.DB.GetWorkspaceLLMConfig(wsID)
+		if existing != nil {
+			req.APIKey = existing.APIKey
+		} else {
+			http.Error(w, "api_key is required", http.StatusBadRequest)
+			return
+		}
+	}
+	if len(req.Models) == 0 {
+		http.Error(w, "at least one model is required", http.StatusBadRequest)
+		return
+	}
+	if len(req.Models) > 100 {
+		http.Error(w, "too many models (max 100)", http.StatusBadRequest)
+		return
+	}
+	for _, m := range req.Models {
+		if m.ID == "" || m.Name == "" {
+			http.Error(w, "each model must have id and name", http.StatusBadRequest)
+			return
+		}
+	}
+	if err := s.DB.SetWorkspaceLLMConfig(wsID, req.BaseURL, req.APIKey, req.Models); err != nil {
+		log.Printf("failed to set workspace llm config: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
+}
+
+func (s *Server) handleDeleteWorkspaceLLMConfig(w http.ResponseWriter, r *http.Request) {
+	wsID := chi.URLParam(r, "id")
+	if !s.requireWorkspaceRole(w, r, wsID, "owner", "maintainer") {
+		return
+	}
+	if err := s.DB.DeleteWorkspaceLLMConfig(wsID); err != nil {
+		log.Printf("failed to delete workspace llm config: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // --- Sandbox handlers ---
 
 func (s *Server) handleGetWorkspaceDefaults(w http.ResponseWriter, r *http.Request) {
@@ -1014,6 +1142,13 @@ func (s *Server) handleCreateSandbox(w http.ResponseWriter, r *http.Request) {
 	id := uuid.New().String()
 	sandboxName := "agent-sandbox-" + shortID(id)
 
+	// Look up BYOK config for this workspace.
+	byokCfg, err := s.DB.GetWorkspaceLLMConfig(wsID)
+	if err != nil {
+		log.Printf("failed to get BYOK config for workspace %s: %v", wsID, err)
+		byokCfg = nil // non-fatal: fall through to proxy path
+	}
+
 	// Generate auth credentials based on sandbox type.
 	var opencodeToken, openclawToken string
 	proxyToken := generatePassword()
@@ -1041,6 +1176,26 @@ func (s *Server) handleCreateSandbox(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Build start options.
+	startOpts := process.StartOptions{
+		Namespace:        wsNamespace,
+		WorkspaceVolumes: workspaceVolumes,
+		OpencodeToken:    opencodeToken,
+		ProxyToken:       proxyToken,
+		SandboxType:      sandboxType,
+		OpenclawToken:    openclawToken,
+		CPU:              cpuMillis,
+		Memory:           memBytes,
+	}
+	if byokCfg != nil {
+		startOpts.BYOKBaseURL = byokCfg.BaseURL
+		startOpts.BYOKAPIKey = byokCfg.APIKey
+		startOpts.BYOKModels = make([]process.LLMModel, len(byokCfg.Models))
+		for i, m := range byokCfg.Models {
+			startOpts.BYOKModels[i] = process.LLMModel{ID: m.ID, Name: m.Name}
+		}
+	}
+
 	// Start container asynchronously.
 	go func() {
 		var podIP string
@@ -1049,32 +1204,14 @@ func (s *Server) handleCreateSandbox(w http.ResponseWriter, r *http.Request) {
 			StartContainerWithIP(string, process.StartOptions) (string, error)
 		}); ok {
 			var err error
-			podIP, err = sc.StartContainerWithIP(id, process.StartOptions{
-				Namespace:        wsNamespace,
-				WorkspaceVolumes: workspaceVolumes,
-				OpencodeToken:    opencodeToken,
-				ProxyToken:       proxyToken,
-				SandboxType:      sandboxType,
-				OpenclawToken:    openclawToken,
-				CPU:              cpuMillis,
-				Memory:           memBytes,
-			})
+			podIP, err = sc.StartContainerWithIP(id, startOpts)
 			if err != nil {
 				log.Printf("failed to start container for sandbox %s: %v", id, err)
 				s.Sandboxes.Delete(id)
 				return
 			}
 		} else {
-			if err := s.ProcessManager.StartContainer(id, process.StartOptions{
-				Namespace:        wsNamespace,
-				WorkspaceVolumes: workspaceVolumes,
-				OpencodeToken:    opencodeToken,
-				ProxyToken:       proxyToken,
-				SandboxType:      sandboxType,
-				OpenclawToken:    openclawToken,
-				CPU:              cpuMillis,
-				Memory:           memBytes,
-			}); err != nil {
+			if err := s.ProcessManager.StartContainer(id, startOpts); err != nil {
 				log.Printf("failed to start container for sandbox %s: %v", id, err)
 				s.Sandboxes.Delete(id)
 				return
@@ -1507,6 +1644,8 @@ func (s *Server) handleWeixinQRWait(w http.ResponseWriter, r *http.Request) {
 			"connected": true,
 			"status":    "confirmed",
 			"message":   "WeChat connected successfully",
+			"bot_id":    normalizeAccountID(result.BotID),
+			"user_id":   result.UserID,
 		})
 
 	case "expired":
@@ -1595,7 +1734,15 @@ func (s *Server) saveWeixinCredentials(ctx context.Context, sandboxID string, re
 	)
 
 	_, err = commander.ExecSimple(ctx, sandboxID, []string{"sh", "-c", script})
-	return err
+	if err != nil {
+		return err
+	}
+
+	// Persist binding record to DB (non-fatal if it fails).
+	if dbErr := s.DB.CreateWeixinBinding(sandboxID, accountID, result.UserID); dbErr != nil {
+		log.Printf("weixin: failed to save binding record: %v", dbErr)
+	}
+	return nil
 }
 
 func base64Encode(data []byte) string {

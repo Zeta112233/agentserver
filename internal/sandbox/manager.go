@@ -146,9 +146,12 @@ func (m *Manager) Start(id, command string, args, env []string, opts process.Sta
 	// Build environment variables for the sandbox pod.
 	containerEnv := []corev1.EnvVar{{Name: "TERM", Value: "xterm-256color"}}
 
-	// Inject proxy credentials via OPENCODE_CONFIG_CONTENT (provider.anthropic.options).
-	if opts.ProxyToken != "" {
-		opcodeConfig := BuildOpencodeConfig(m.cfg.OpencodeConfigContent, opts.ProxyToken)
+	// Inject LLM provider credentials via OPENCODE_CONFIG_CONTENT (provider.anthropic.options).
+	if opts.BYOKBaseURL != "" {
+		opcodeConfig := BuildOpencodeConfig(m.cfg.OpencodeConfigContent, opts.BYOKAPIKey, opts.BYOKBaseURL)
+		containerEnv = append(containerEnv, corev1.EnvVar{Name: "OPENCODE_CONFIG_CONTENT", Value: opcodeConfig})
+	} else if opts.ProxyToken != "" {
+		opcodeConfig := BuildOpencodeConfig(m.cfg.OpencodeConfigContent, opts.ProxyToken, "")
 		containerEnv = append(containerEnv, corev1.EnvVar{Name: "OPENCODE_CONFIG_CONTENT", Value: opcodeConfig})
 	} else if m.cfg.OpencodeConfigContent != "" {
 		containerEnv = append(containerEnv, corev1.EnvVar{Name: "OPENCODE_CONFIG_CONTENT", Value: m.cfg.OpencodeConfigContent})
@@ -314,9 +317,13 @@ func (m *Manager) StartContainerWithIP(id string, opts process.StartOptions) (st
 	// Build environment variables for the sandbox pod.
 	containerEnv := []corev1.EnvVar{{Name: "TERM", Value: "xterm-256color"}}
 
-	// Inject proxy credentials via provider config.
+	// Inject LLM provider credentials.
 	proxyBaseURL := ExtractProxyBaseURL(m.cfg.OpencodeConfigContent)
-	if opts.ProxyToken != "" && proxyBaseURL != "" {
+	if opts.BYOKBaseURL != "" {
+		containerEnv = append(containerEnv,
+			corev1.EnvVar{Name: "ANTHROPIC_API_KEY", Value: opts.BYOKAPIKey},
+		)
+	} else if opts.ProxyToken != "" && proxyBaseURL != "" {
 		containerEnv = append(containerEnv,
 			corev1.EnvVar{Name: "ANTHROPIC_API_KEY", Value: opts.ProxyToken},
 		)
@@ -339,8 +346,15 @@ func (m *Manager) StartContainerWithIP(id string, opts process.StartOptions) (st
 		if containerPort == 0 {
 			containerPort = 18789
 		}
-		// Build openclaw config JSON with gateway settings and Anthropic proxy.
-		openclawCfg := BuildOpenclawConfig(proxyBaseURL, opts.ProxyToken, opts.OpenclawToken, m.cfg.OpenclawWeixinEnabled)
+		// Build openclaw config JSON with gateway settings and LLM provider.
+		cfgBaseURL, cfgAPIKey := proxyBaseURL, opts.ProxyToken
+		var cfgModels []process.LLMModel
+		if opts.BYOKBaseURL != "" {
+			cfgBaseURL = opts.BYOKBaseURL
+			cfgAPIKey = opts.BYOKAPIKey
+			cfgModels = opts.BYOKModels
+		}
+		openclawCfg := BuildOpenclawConfig(cfgBaseURL, cfgAPIKey, opts.OpenclawToken, m.cfg.OpenclawWeixinEnabled, cfgModels)
 		containerCmd = []string{"sh", "-c", `mkdir -p ~/.openclaw && cat > ~/.openclaw/openclaw.json << 'CFGEOF'
 ` + openclawCfg + `
 CFGEOF
@@ -352,8 +366,13 @@ exec node openclaw.mjs gateway --allow-unconfigured --bind lan`}
 		if opts.OpencodeToken != "" {
 			containerEnv = append(containerEnv, corev1.EnvVar{Name: "OPENCODE_SERVER_PASSWORD", Value: opts.OpencodeToken})
 		}
-		// Merge proxy provider config into OPENCODE_CONFIG_CONTENT.
-		opcodeConfig := BuildOpencodeConfig(m.cfg.OpencodeConfigContent, opts.ProxyToken)
+		// Merge LLM provider config into OPENCODE_CONFIG_CONTENT.
+		apiKey, overrideURL := opts.ProxyToken, ""
+		if opts.BYOKBaseURL != "" {
+			apiKey = opts.BYOKAPIKey
+			overrideURL = opts.BYOKBaseURL
+		}
+		opcodeConfig := BuildOpencodeConfig(m.cfg.OpencodeConfigContent, apiKey, overrideURL)
 		containerEnv = append(containerEnv, corev1.EnvVar{Name: "OPENCODE_CONFIG_CONTENT", Value: opcodeConfig})
 	}
 

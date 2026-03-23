@@ -433,6 +433,31 @@ function OverviewTab({ sandbox, usageData, totals }: {
         <AgentInfoSection info={sandbox.agent_info} />
       )}
 
+      {/* WeChat Bindings */}
+      {isOpenClaw && sandbox.weixin_bindings && sandbox.weixin_bindings.length > 0 && (
+        <div className="rounded-lg border border-[var(--border)] bg-[var(--card)]">
+          <div className="flex items-center gap-2 border-b border-[var(--border)] px-5 py-3">
+            <MessageSquare size={14} className="text-green-400" />
+            <span className="text-sm font-medium text-[var(--foreground)]">WeChat Bindings</span>
+          </div>
+          <div className="divide-y divide-[var(--border)]">
+            {sandbox.weixin_bindings.map((b, i) => (
+              <div key={i} className="flex items-center justify-between px-5 py-3">
+                <div className="flex flex-col gap-0.5">
+                  <span className="text-xs font-mono text-[var(--foreground)]">{b.bot_id}</span>
+                  {b.user_id && (
+                    <span className="text-[11px] text-[var(--muted-foreground)]">user: {b.user_id}</span>
+                  )}
+                </div>
+                <span className="text-xs text-[var(--muted-foreground)]">
+                  {new Date(b.bound_at).toLocaleString()}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Usage */}
       {usageData && usageData.length > 0 && (
         <div className="rounded-lg border border-[var(--border)] bg-[var(--card)]">
