@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -62,12 +63,13 @@ func (s *Server) getValidModelserverToken(workspaceID string) (token string, exp
 		}
 		defer resp.Body.Close()
 
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+			return nil, fmt.Errorf("refresh token endpoint returned %d: %s", resp.StatusCode, string(body))
+		}
 		var tokenResp modelserverTokenResponse
 		if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
 			return nil, fmt.Errorf("decode refresh token response: %w", err)
-		}
-		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("refresh token endpoint returned %d", resp.StatusCode)
 		}
 
 		newExpiresAt := time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second)

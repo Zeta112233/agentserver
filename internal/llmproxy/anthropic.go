@@ -138,9 +138,9 @@ func (s *Server) handleAnthropicProxy(w http.ResponseWriter, r *http.Request) {
 				if s.config.AnthropicAuthToken != "" {
 					req.Header.Set("Authorization", "Bearer "+s.config.AnthropicAuthToken)
 				}
-			}
-			if req.Header.Get("anthropic-version") == "" {
-				req.Header.Set("anthropic-version", "2023-06-01")
+				if req.Header.Get("anthropic-version") == "" {
+					req.Header.Set("anthropic-version", "2023-06-01")
+				}
 			}
 		},
 		ModifyResponse: func(resp *http.Response) error {
@@ -224,7 +224,7 @@ func (s *Server) recordUsage(sbx *SandboxInfo, traceID, requestID, model, msgID 
 		TraceID:                  traceID,
 		SandboxID:                sbx.ID,
 		WorkspaceID:              sbx.WorkspaceID,
-		Provider:                 "anthropic",
+		Provider:                 "anthropic", // TODO: track provider as "modelserver" for MS-forwarded requests
 		Model:                    model,
 		MessageID:                msgID,
 		InputTokens:              usage.InputTokens,

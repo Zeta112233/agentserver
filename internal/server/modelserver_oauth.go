@@ -16,6 +16,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/agentserver/agentserver/internal/auth"
 	"github.com/agentserver/agentserver/internal/db"
 )
 
@@ -166,7 +167,11 @@ func (s *Server) handleModelserverCallback(w http.ResponseWriter, r *http.Reques
 	}
 
 	// Verify user has owner/maintainer role on workspace.
-	if !s.requireWorkspaceRole(w, r, wsID, "owner", "maintainer") {
+	// Use redirect instead of raw HTTP error since we're in the OAuth callback.
+	userID := auth.UserIDFromContext(r.Context())
+	member, err := s.DB.GetWorkspaceMember(wsID, userID)
+	if err != nil || member == nil || (member.Role != "owner" && member.Role != "maintainer") {
+		redirectError("insufficient permissions")
 		return
 	}
 
