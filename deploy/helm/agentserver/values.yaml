@@ -102,6 +102,19 @@ agentSandbox:
   install: true
   controllerImage: registry.k8s.io/agent-sandbox/agent-sandbox-controller:v0.1.1
 
+modelserver:
+  # Connect workspaces to a ModelServer project via OAuth 2.0 (Hydra).
+  # When enabled, sandbox LLM traffic routes through llmproxy → ModelServer.
+  enabled: false
+  oauth:
+    clientId: ""
+    clientSecret: ""
+    authUrl: ""        # Hydra public authorization endpoint (e.g. https://codeapi.cs.ac.cn/oauth2/auth)
+    tokenUrl: ""       # Hydra public token endpoint (e.g. https://codeapi.cs.ac.cn/oauth2/token)
+    introspectUrl: ""  # Hydra admin introspection endpoint (e.g. http://hydra:4445/admin/oauth2/introspect)
+    redirectUri: ""    # OAuth callback URL (auto-derived as https://<platform.domain>/api/auth/modelserver/callback if blank)
+  proxyUrl: ""         # ModelServer LLM proxy URL (e.g. https://code.ai.cs.ac.cn)
+
 llmproxy:
   # LLM proxy for token usage tracking and request tracing.
   # The proxy baseURL is auto-injected into sandbox OPENCODE_CONFIG_CONTENT.

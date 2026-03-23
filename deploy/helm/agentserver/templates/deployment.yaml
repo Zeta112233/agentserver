@@ -157,6 +157,25 @@ spec:
                   name: {{ .Release.Name }}-secret
                   key: github-client-secret
             {{- end }}
+            {{- if .Values.modelserver.enabled }}
+            - name: MODELSERVER_OAUTH_CLIENT_ID
+              value: {{ .Values.modelserver.oauth.clientId | quote }}
+            - name: MODELSERVER_OAUTH_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-secret
+                  key: modelserver-oauth-client-secret
+            - name: MODELSERVER_OAUTH_AUTH_URL
+              value: {{ .Values.modelserver.oauth.authUrl | quote }}
+            - name: MODELSERVER_OAUTH_TOKEN_URL
+              value: {{ .Values.modelserver.oauth.tokenUrl | quote }}
+            - name: MODELSERVER_OAUTH_INTROSPECT_URL
+              value: {{ .Values.modelserver.oauth.introspectUrl | quote }}
+            - name: MODELSERVER_OAUTH_REDIRECT_URI
+              value: {{ default (printf "https://%s/api/auth/modelserver/callback" .Values.platform.domain) .Values.modelserver.oauth.redirectUri | quote }}
+            - name: MODELSERVER_PROXY_URL
+              value: {{ .Values.modelserver.proxyUrl | quote }}
+            {{- end }}
             {{- if .Values.platform.auth.oidc.generic.enabled }}
             - name: OIDC_ISSUER_URL
               value: {{ .Values.platform.auth.oidc.generic.issuerUrl | quote }}
@@ -198,6 +217,9 @@ stringData:
   {{- if .Values.platform.auth.oidc.generic.enabled }}
   oidc-client-secret: {{ .Values.platform.auth.oidc.generic.clientSecret | quote }}
   {{- end }}
+  {{- if .Values.modelserver.enabled }}
+  modelserver-oauth-client-secret: {{ .Values.modelserver.oauth.clientSecret | quote }}
+  {{- end }}
 {{- else }}
 ---
 apiVersion: v1
@@ -214,5 +236,8 @@ stringData:
   {{- end }}
   {{- if .Values.platform.auth.oidc.generic.enabled }}
   oidc-client-secret: {{ .Values.platform.auth.oidc.generic.clientSecret | quote }}
+  {{- end }}
+  {{- if .Values.modelserver.enabled }}
+  modelserver-oauth-client-secret: {{ .Values.modelserver.oauth.clientSecret | quote }}
   {{- end }}
 {{- end }}
