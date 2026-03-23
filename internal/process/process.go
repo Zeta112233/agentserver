@@ -33,6 +33,7 @@ type StartOptions struct {
 	BYOKBaseURL      string        // BYOK: user's LLM provider base URL (non-empty enables BYOK)
 	BYOKAPIKey       string        // BYOK: user's LLM provider API key
 	BYOKModels       []LLMModel    // BYOK: user's custom model list
+	CustomModels     []LLMModel    // modelserver models (for OpenClaw, independent of BYOK)
 }
 
 // Manager manages process lifecycles.

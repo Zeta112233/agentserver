@@ -203,6 +203,13 @@ var serveCmd = &cobra.Command{
 
 		srv := server.New(authSvc, oidcMgr, database, sandboxStore, procMgr, driveMgr, nsMgr, tunnel.NewRegistry(), staticFS, !strings.EqualFold(os.Getenv("PASSWORD_AUTH_ENABLED"), "false"))
 		srv.LLMProxyURL = os.Getenv("LLMPROXY_URL")
+		srv.ModelserverOAuthClientID = os.Getenv("MODELSERVER_OAUTH_CLIENT_ID")
+		srv.ModelserverOAuthClientSecret = os.Getenv("MODELSERVER_OAUTH_CLIENT_SECRET")
+		srv.ModelserverOAuthAuthURL = os.Getenv("MODELSERVER_OAUTH_AUTH_URL")
+		srv.ModelserverOAuthTokenURL = os.Getenv("MODELSERVER_OAUTH_TOKEN_URL")
+		srv.ModelserverOAuthIntrospectURL = os.Getenv("MODELSERVER_OAUTH_INTROSPECT_URL")
+		srv.ModelserverOAuthRedirectURI = os.Getenv("MODELSERVER_OAUTH_REDIRECT_URI")
+		srv.ModelserverProxyURL = os.Getenv("MODELSERVER_PROXY_URL")
 		addr := fmt.Sprintf(":%d", port)
 
 		// Start idle watcher with a dynamic timeout getter that reads from the settings chain.

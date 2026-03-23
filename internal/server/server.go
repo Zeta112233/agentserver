@@ -44,6 +44,15 @@ type Server struct {
 	OpenclawSubdomainPrefix  string // e.g. "claw" — subdomain: claw-{id}.{baseDomain}
 	PasswordAuthEnabled      bool   // when false, /api/auth/login and /api/auth/register are not registered
 	LLMProxyURL              string // base URL for the llmproxy service (e.g. "http://agentserver-llmproxy:8081")
+
+	// ModelServer OAuth
+	ModelserverOAuthClientID      string
+	ModelserverOAuthClientSecret  string
+	ModelserverOAuthAuthURL       string
+	ModelserverOAuthTokenURL      string
+	ModelserverOAuthIntrospectURL string
+	ModelserverOAuthRedirectURI   string
+	ModelserverProxyURL           string
 }
 
 func New(a *auth.Auth, oidcMgr *auth.OIDCManager, database *db.DB, sandboxStore *sbxstore.Store, processManager process.Manager, driveManager storage.DriveManager, nsMgr *namespace.Manager, tunnelReg *tunnel.Registry, staticFS fs.FS, passwordAuthEnabled bool) *Server {
@@ -116,6 +125,9 @@ func (s *Server) Router() http.Handler {
 	// Internal API for LLM proxy token validation (no cookie auth).
 	r.Post("/internal/validate-proxy-token", s.handleValidateProxyToken)
 
+	// Internal API for ModelServer token retrieval (no cookie auth).
+	r.Get("/internal/workspaces/{id}/modelserver-token", s.handleInternalModelserverToken)
+
 	// Agent registration (auth via one-time code, no cookie auth needed).
 	r.Post("/api/agent/register", s.handleAgentRegister)
 
@@ -175,6 +187,12 @@ func (s *Server) Router() http.Handler {
 		r.Get("/api/workspaces/{id}/llm-config", s.handleGetWorkspaceLLMConfig)
 		r.Put("/api/workspaces/{id}/llm-config", s.handleSetWorkspaceLLMConfig)
 		r.Delete("/api/workspaces/{id}/llm-config", s.handleDeleteWorkspaceLLMConfig)
+
+		// ModelServer OAuth
+		r.Get("/api/workspaces/{id}/modelserver/connect", s.handleModelserverConnect)
+		r.Delete("/api/workspaces/{id}/modelserver/disconnect", s.handleModelserverDisconnect)
+		r.Get("/api/workspaces/{id}/modelserver/status", s.handleModelserverStatus)
+		r.Get("/api/auth/modelserver/callback", s.handleModelserverCallback)
 
 		// Sandbox routes
 		r.Get("/api/workspaces/{wid}/sandboxes", s.handleListSandboxes)
@@ -1150,11 +1168,12 @@ func (s *Server) handleCreateSandbox(w http.ResponseWriter, r *http.Request) {
 	id := uuid.New().String()
 	sandboxName := "agent-sandbox-" + shortID(id)
 
-	// Look up BYOK config for this workspace.
+	// Look up modelserver connection and BYOK config for this workspace.
+	msConn, _ := s.DB.GetModelserverConnection(wsID)
 	byokCfg, err := s.DB.GetWorkspaceLLMConfig(wsID)
 	if err != nil {
 		log.Printf("failed to get BYOK config for workspace %s: %v", wsID, err)
-		byokCfg = nil // non-fatal: fall through to proxy path
+		byokCfg = nil
 	}
 
 	// Generate auth credentials based on sandbox type.
@@ -1195,7 +1214,14 @@ func (s *Server) handleCreateSandbox(w http.ResponseWriter, r *http.Request) {
 		CPU:              cpuMillis,
 		Memory:           memBytes,
 	}
-	if byokCfg != nil {
+	// Priority: modelserver > BYOK > platform default
+	if msConn != nil {
+		// Modelserver connection: sandbox routes through llmproxy (no BYOK injection)
+		startOpts.CustomModels = make([]process.LLMModel, len(msConn.Models))
+		for i, m := range msConn.Models {
+			startOpts.CustomModels[i] = process.LLMModel{ID: m.ID, Name: m.Name}
+		}
+	} else if byokCfg != nil {
 		startOpts.BYOKBaseURL = byokCfg.BaseURL
 		startOpts.BYOKAPIKey = byokCfg.APIKey
 		startOpts.BYOKModels = make([]process.LLMModel, len(byokCfg.Models))
