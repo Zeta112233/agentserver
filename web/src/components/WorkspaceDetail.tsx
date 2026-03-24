@@ -574,7 +574,7 @@ function SettingsTab({ workspaceId }: { workspaceId: string }) {
             <div className="flex gap-2">
               <button
                 onClick={() => { window.location.href = `/api/workspaces/${workspaceId}/modelserver/connect` }}
-                className="px-3 py-1.5 text-sm border border-[var(--border)] rounded-md bg-[var(--card)] text-[var(--foreground)] cursor-pointer hover:bg-[var(--muted)]"
+                className="rounded-md border border-[var(--border)] bg-[var(--card)] px-3 py-1 text-xs font-medium text-[var(--foreground)] hover:bg-[var(--secondary)]"
               >
                 Reconnect
               </button>
@@ -583,7 +583,7 @@ function SettingsTab({ workspaceId }: { workspaceId: string }) {
                   await disconnectModelserver(workspaceId)
                   setMsStatus({ connected: false })
                 }}
-                className="px-3 py-1.5 text-sm border border-[var(--border)] rounded-md bg-[var(--card)] text-red-500 cursor-pointer hover:bg-[var(--muted)]"
+                className="rounded-md border border-[var(--border)] bg-[var(--card)] px-3 py-1 text-xs font-medium text-red-400 hover:bg-red-500/10"
               >
                 Disconnect
               </button>
@@ -592,7 +592,7 @@ function SettingsTab({ workspaceId }: { workspaceId: string }) {
         ) : (
           <button
             onClick={() => { window.location.href = `/api/workspaces/${workspaceId}/modelserver/connect` }}
-            className="px-4 py-2 text-sm border border-[var(--border)] rounded-md bg-[var(--card)] text-[var(--foreground)] cursor-pointer hover:bg-[var(--muted)]"
+            className="rounded-md border border-[var(--border)] bg-[var(--card)] px-3 py-1 text-xs font-medium text-[var(--foreground)] hover:bg-[var(--secondary)]"
           >
             Connect to ModelServer
           </button>
