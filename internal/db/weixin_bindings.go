@@ -7,11 +7,14 @@ import (
 
 // WeixinBinding records a WeChat QR scan binding for a sandbox.
 type WeixinBinding struct {
-	ID        int
-	SandboxID string
-	BotID     string
-	UserID    string
-	BoundAt   time.Time
+	ID            int
+	SandboxID     string
+	BotID         string
+	UserID        string
+	BoundAt       time.Time
+	BotToken      string
+	ILinkBaseURL  string
+	GetUpdatesBuf string
 }
 
 // CreateWeixinBinding inserts a new binding record after a successful QR login.
@@ -77,4 +80,74 @@ func (db *DB) SaveBotCredentials(sandboxID, botID, botToken, baseURL string) err
 		return fmt.Errorf("save bot credentials: %w", err)
 	}
 	return nil
+}
+
+// GetBindingsWithBotToken returns all nanoclaw bindings that have a bot_token set,
+// for starting long-poll goroutines. Only returns bindings for running nanoclaw sandboxes.
+func (db *DB) GetBindingsWithBotToken() ([]*WeixinBinding, error) {
+	rows, err := db.Query(
+		`SELECT b.id, b.sandbox_id, b.bot_id, b.user_id, b.bound_at,
+		        COALESCE(b.bot_token, ''), COALESCE(b.ilink_base_url, ''), COALESCE(b.get_updates_buf, '')
+		 FROM sandbox_weixin_bindings b
+		 JOIN sandboxes s ON s.id = b.sandbox_id
+		 WHERE b.bot_token IS NOT NULL AND b.bot_token != ''
+		   AND s.type = 'nanoclaw' AND s.status = 'running'
+		 ORDER BY b.bound_at DESC`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("get bindings with bot token: %w", err)
+	}
+	defer rows.Close()
+
+	var bindings []*WeixinBinding
+	for rows.Next() {
+		b := &WeixinBinding{}
+		if err := rows.Scan(&b.ID, &b.SandboxID, &b.BotID, &b.UserID, &b.BoundAt,
+			&b.BotToken, &b.ILinkBaseURL, &b.GetUpdatesBuf); err != nil {
+			return nil, fmt.Errorf("scan binding with bot token: %w", err)
+		}
+		bindings = append(bindings, b)
+	}
+	return bindings, rows.Err()
+}
+
+// UpdateGetUpdatesBuf persists the long-poll cursor for a binding.
+func (db *DB) UpdateGetUpdatesBuf(sandboxID, botID, buf string) error {
+	_, err := db.Exec(
+		`UPDATE sandbox_weixin_bindings SET get_updates_buf = $1, last_poll_at = NOW()
+		 WHERE sandbox_id = $2 AND bot_id = $3`,
+		buf, sandboxID, botID,
+	)
+	if err != nil {
+		return fmt.Errorf("update get_updates_buf: %w", err)
+	}
+	return nil
+}
+
+// UpsertContextToken stores or updates the context_token for a user conversation.
+func (db *DB) UpsertContextToken(sandboxID, botID, userID, contextToken string) error {
+	_, err := db.Exec(
+		`INSERT INTO weixin_context_tokens (sandbox_id, bot_id, user_id, context_token, updated_at)
+		 VALUES ($1, $2, $3, $4, NOW())
+		 ON CONFLICT (sandbox_id, bot_id, user_id) DO UPDATE SET context_token = $4, updated_at = NOW()`,
+		sandboxID, botID, userID, contextToken,
+	)
+	if err != nil {
+		return fmt.Errorf("upsert context token: %w", err)
+	}
+	return nil
+}
+
+// GetContextToken retrieves the cached context_token for a user.
+func (db *DB) GetContextToken(sandboxID, botID, userID string) (string, error) {
+	var token string
+	err := db.QueryRow(
+		`SELECT context_token FROM weixin_context_tokens
+		 WHERE sandbox_id = $1 AND bot_id = $2 AND user_id = $3`,
+		sandboxID, botID, userID,
+	).Scan(&token)
+	if err != nil {
+		return "", err
+	}
+	return token, nil
 }
