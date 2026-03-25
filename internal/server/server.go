@@ -96,6 +96,7 @@ func New(a *auth.Auth, oidcMgr *auth.OIDCManager, database *db.DB, sandboxStore 
 		PasswordAuthEnabled:     passwordAuthEnabled,
 	}
 	s.WeixinBridge = weixin.NewBridge(database)
+	s.restoreWeixinBridgePollers()
 	if s.OIDC != nil {
 		s.OIDC.OnUserCreated = s.createDefaultWorkspace
 	}
@@ -1647,6 +1648,45 @@ func generatePassword() string {
 		return uuid.New().String()
 	}
 	return hex.EncodeToString(b)
+}
+
+// ---------------------------------------------------------------------------
+// WeChat bridge restore (on agentserver restart)
+// ---------------------------------------------------------------------------
+
+// restoreWeixinBridgePollers restarts long-poll goroutines for all active
+// nanoclaw WeChat bindings. Called once during server startup to recover
+// from agentserver restarts — the get_updates_buf cursor is persisted in DB,
+// so pollers resume from where they left off without message loss.
+func (s *Server) restoreWeixinBridgePollers() {
+	if s.WeixinBridge == nil {
+		return
+	}
+	bindings, err := s.DB.GetBindingsWithBotToken()
+	if err != nil {
+		log.Printf("weixin bridge restore: failed to query bindings: %v", err)
+		return
+	}
+	restored := 0
+	for _, b := range bindings {
+		sbx, ok := s.Sandboxes.Get(b.SandboxID)
+		if !ok || sbx.PodIP == "" {
+			continue
+		}
+		s.WeixinBridge.StartPoller(weixin.BridgeBinding{
+			SandboxID:     b.SandboxID,
+			BotID:         b.BotID,
+			BotToken:      b.BotToken,
+			ILinkBaseURL:  b.ILinkBaseURL,
+			GetUpdatesBuf: b.GetUpdatesBuf,
+			PodIP:         sbx.PodIP,
+			BridgeSecret:  sbx.NanoclawBridgeSecret,
+		})
+		restored++
+	}
+	if restored > 0 {
+		log.Printf("weixin bridge restore: started %d poller(s)", restored)
+	}
 }
 
 // ---------------------------------------------------------------------------
