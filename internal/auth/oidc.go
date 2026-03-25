@@ -30,41 +30,59 @@ type Provider interface {
 
 // OIDCManager orchestrates multiple OIDC/OAuth2 providers.
 type OIDCManager struct {
-	providers     map[string]Provider
-	baseURL       string
-	auth          *Auth
-	OnUserCreated func(userID string) // called when a brand-new user is created via OIDC
+	providers      map[string]Provider
+	allowedDomains map[string][]string // provider name → allowed base domains (empty = all)
+	baseURL        string
+	auth           *Auth
+	OnUserCreated  func(userID string) // called when a brand-new user is created via OIDC
 }
 
 // NewOIDCManager creates a new manager. baseURL is the external redirect base (e.g. "https://app.example.com").
 func NewOIDCManager(baseURL string, authSvc *Auth) *OIDCManager {
 	return &OIDCManager{
-		providers: make(map[string]Provider),
-		baseURL:   strings.TrimRight(baseURL, "/"),
-		auth:      authSvc,
+		providers:      make(map[string]Provider),
+		allowedDomains: make(map[string][]string),
+		baseURL:        strings.TrimRight(baseURL, "/"),
+		auth:           authSvc,
 	}
 }
 
-// RegisterProvider adds a provider.
+// RegisterProvider adds a provider available on all domains.
 func (m *OIDCManager) RegisterProvider(p Provider) {
 	m.providers[p.Name()] = p
 }
 
-// ProviderNames returns the list of registered provider names.
-func (m *OIDCManager) ProviderNames() []string {
-	names := make([]string, 0, len(m.providers))
-	for n := range m.providers {
-		names = append(names, n)
+// RegisterProviderWithDomains adds a provider restricted to specific base domains.
+// If domains is empty, the provider is available on all domains.
+func (m *OIDCManager) RegisterProviderWithDomains(p Provider, domains []string) {
+	m.providers[p.Name()] = p
+	if len(domains) > 0 {
+		m.allowedDomains[p.Name()] = domains
 	}
-	return names
 }
 
-// HandleProviders returns the list of available providers as JSON.
-func (m *OIDCManager) HandleProviders(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"providers": m.ProviderNames(),
-	})
+// ProviderNamesForHost returns provider names available for the given request host.
+func (m *OIDCManager) ProviderNamesForHost(host string) []string {
+	// Strip port if present.
+	if idx := strings.LastIndex(host, ":"); idx != -1 {
+		host = host[:idx]
+	}
+	names := make([]string, 0, len(m.providers))
+	for n := range m.providers {
+		domains := m.allowedDomains[n]
+		if len(domains) == 0 {
+			// No restriction — available on all domains.
+			names = append(names, n)
+			continue
+		}
+		for _, d := range domains {
+			if host == d || strings.HasSuffix(host, "."+d) {
+				names = append(names, n)
+				break
+			}
+		}
+	}
+	return names
 }
 
 const (

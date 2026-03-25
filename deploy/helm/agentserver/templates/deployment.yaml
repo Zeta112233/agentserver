@@ -160,6 +160,18 @@ spec:
                 secretKeyRef:
                   name: {{ .Release.Name }}-secret
                   key: github-client-secret
+            {{- if .Values.platform.auth.oidc.github.redirectBaseUrl }}
+            - name: GITHUB_REDIRECT_BASE_URL
+              value: {{ .Values.platform.auth.oidc.github.redirectBaseUrl | quote }}
+            {{- end }}
+            {{- if .Values.platform.auth.oidc.github.allowedDomains }}
+            - name: GITHUB_ALLOWED_DOMAINS
+              value: {{ .Values.platform.auth.oidc.github.allowedDomains | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if .Values.platform.auth.oidc.generic.allowedDomains }}
+            - name: OIDC_ALLOWED_DOMAINS
+              value: {{ .Values.platform.auth.oidc.generic.allowedDomains | quote }}
             {{- end }}
             {{- if .Values.modelserver.enabled }}
             - name: MODELSERVER_OAUTH_CLIENT_ID

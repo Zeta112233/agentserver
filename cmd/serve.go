@@ -185,9 +185,15 @@ var serveCmd = &cobra.Command{
 			oidcMgr = auth.NewOIDCManager(oidcBaseURL, authSvc)
 
 			if ghClientID != "" && ghClientSecret != "" {
-				ghRedirect := oidcBaseURL + "/api/auth/oidc/github/callback"
-				oidcMgr.RegisterProvider(auth.NewGitHubProvider(ghClientID, ghClientSecret, ghRedirect))
-				log.Println("OIDC: GitHub provider registered")
+				// Per-provider redirect base URL (falls back to OIDC_REDIRECT_BASE_URL).
+				ghBaseURL := os.Getenv("GITHUB_REDIRECT_BASE_URL")
+				if ghBaseURL == "" {
+					ghBaseURL = oidcBaseURL
+				}
+				ghRedirect := ghBaseURL + "/api/auth/oidc/github/callback"
+				ghDomains := parseCommaSeparated(os.Getenv("GITHUB_ALLOWED_DOMAINS"))
+				oidcMgr.RegisterProviderWithDomains(auth.NewGitHubProvider(ghClientID, ghClientSecret, ghRedirect), ghDomains)
+				log.Printf("OIDC: GitHub provider registered (domains: %v)", ghDomains)
 			}
 
 			if oidcIssuer != "" && oidcClientID != "" && oidcClientSecret != "" {
@@ -196,8 +202,9 @@ var serveCmd = &cobra.Command{
 				if err != nil {
 					log.Fatalf("Failed to initialize generic OIDC provider: %v", err)
 				}
-				oidcMgr.RegisterProvider(genericProvider)
-				log.Println("OIDC: Generic provider registered")
+				oidcDomains := parseCommaSeparated(os.Getenv("OIDC_ALLOWED_DOMAINS"))
+				oidcMgr.RegisterProviderWithDomains(genericProvider, oidcDomains)
+				log.Printf("OIDC: Generic provider registered (domains: %v)", oidcDomains)
 			}
 		}
 
@@ -318,6 +325,21 @@ func parseK8sMemoryBytes(s string, fallback int64) int64 {
 		return fallback
 	}
 	return int64(f * float64(multiplier))
+}
+
+// parseCommaSeparated splits a comma-separated string into trimmed non-empty parts.
+func parseCommaSeparated(s string) []string {
+	if s == "" {
+		return nil
+	}
+	var parts []string
+	for _, p := range strings.Split(s, ",") {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			parts = append(parts, p)
+		}
+	}
+	return parts
 }
 
 func init() {

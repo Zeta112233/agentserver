@@ -60,11 +60,17 @@ platform:
         enabled: false
         clientId: ""
         clientSecret: ""
+        # Override OAuth callback base URL (defaults to https://<platform.domain>).
+        redirectBaseUrl: ""
+        # Comma-separated base domains where GitHub login is shown (empty = all domains).
+        allowedDomains: ""
       generic:
         enabled: false
         issuerUrl: ""
         clientId: ""
         clientSecret: ""
+        # Comma-separated base domains where SSO login is shown (empty = all domains).
+        allowedDomains: ""
 
 sandbox:
   # Base domain for subdomain-based sandbox routing (e.g. "agentserver.dev").

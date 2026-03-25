@@ -154,7 +154,7 @@ func (s *Server) Router() http.Handler {
 		r.Get("/api/auth/oidc/providers", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]interface{}{
-				"providers":    s.OIDC.ProviderNames(),
+				"providers":     s.OIDC.ProviderNamesForHost(r.Host),
 				"password_auth": s.PasswordAuthEnabled,
 			})
 		})
