@@ -26,7 +26,7 @@ type StartOptions struct {
 	WorkspaceVolumes []VolumeMount // workspace drive volume mounts
 	OpencodeToken    string        // per-sandbox token for opencode server auth
 	ProxyToken       string        // per-sandbox token for Anthropic API proxy auth
-	SandboxType      string        // "opencode" or "openclaw"
+	SandboxType      string        // "opencode", "openclaw", or "nanoclaw"
 	OpenclawToken    string        // openclaw only: gateway auth token
 	CPU              int           // CPU limit in millicores (e.g. 2000 = 2 cores)
 	Memory           int64         // memory limit in bytes (e.g. 2147483648 = 2Gi)
@@ -34,6 +34,7 @@ type StartOptions struct {
 	BYOKAPIKey       string        // BYOK: user's LLM provider API key
 	BYOKModels       []LLMModel    // BYOK: user's custom model list
 	CustomModels     []LLMModel    // modelserver models (for OpenClaw, independent of BYOK)
+	NanoclawBridgeSecret string        // nanoclaw only: shared secret for bridge HTTP auth
 }
 
 // Manager manages process lifecycles.
