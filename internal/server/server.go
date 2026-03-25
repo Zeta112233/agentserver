@@ -1127,8 +1127,8 @@ func (s *Server) handleCreateSandbox(w http.ResponseWriter, r *http.Request) {
 	if sandboxType == "" {
 		sandboxType = "opencode"
 	}
-	if sandboxType != "opencode" && sandboxType != "openclaw" {
-		http.Error(w, "invalid sandbox type: must be opencode or openclaw", http.StatusBadRequest)
+	if sandboxType != "opencode" && sandboxType != "openclaw" && sandboxType != "nanoclaw" {
+		http.Error(w, "invalid sandbox type: must be opencode, openclaw, or nanoclaw", http.StatusBadRequest)
 		return
 	}
 
@@ -1209,6 +1209,9 @@ func (s *Server) handleCreateSandbox(w http.ResponseWriter, r *http.Request) {
 	switch sandboxType {
 	case "openclaw":
 		openclawToken = generatePassword()
+	case "nanoclaw":
+		// NanoClaw uses a bridge secret instead of openclaw/opencode tokens.
+		// The bridge secret is stored separately after sandbox creation.
 	default: // "opencode"
 		opencodeToken = generatePassword()
 	}
@@ -1230,6 +1233,15 @@ func (s *Server) handleCreateSandbox(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Generate and store bridge secret for nanoclaw sandboxes.
+	if sandboxType == "nanoclaw" {
+		bridgeSecret := generatePassword()
+		if err := s.DB.UpdateSandboxNanoclawBridgeSecret(id, bridgeSecret); err != nil {
+			log.Printf("failed to store nanoclaw bridge secret: %v", err)
+		}
+		sbx.NanoclawBridgeSecret = bridgeSecret
+	}
+
 	// Build start options.
 	startOpts := process.StartOptions{
 		Namespace:        wsNamespace,
@@ -1240,6 +1252,9 @@ func (s *Server) handleCreateSandbox(w http.ResponseWriter, r *http.Request) {
 		OpenclawToken:    openclawToken,
 		CPU:              cpuMillis,
 		Memory:           memBytes,
+	}
+	if sandboxType == "nanoclaw" {
+		startOpts.NanoclawBridgeSecret = sbx.NanoclawBridgeSecret
 	}
 	// Priority: modelserver > BYOK > platform default
 	if msConn != nil {
