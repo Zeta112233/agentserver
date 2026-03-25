@@ -14,6 +14,7 @@ type IdleWatcher struct {
 	procMgr    process.Manager
 	store      *Store
 	getTimeout func() time.Duration
+	onPrePause func(sandboxID string) // called before pausing a sandbox (e.g. to stop bridge pollers)
 	stop       chan struct{}
 }
 
@@ -28,6 +29,12 @@ func NewIdleWatcher(database *db.DB, procMgr process.Manager, store *Store, getT
 		getTimeout: getTimeout,
 		stop:       make(chan struct{}),
 	}
+}
+
+// SetOnPrePause sets a callback that is invoked before a sandbox is paused.
+// Used to stop WeChat bridge pollers before the Pod goes away.
+func (w *IdleWatcher) SetOnPrePause(fn func(sandboxID string)) {
+	w.onPrePause = fn
 }
 
 // Start begins the idle check loop. Call Stop() to terminate.
@@ -68,6 +75,11 @@ func (w *IdleWatcher) check() {
 
 	for _, sbx := range sandboxes {
 		log.Printf("idle watcher: pausing idle sandbox %s (last activity: %v)", sbx.ID, sbx.LastActivityAt)
+
+		// Pre-pause hook (stop bridge pollers, etc.)
+		if w.onPrePause != nil {
+			w.onPrePause(sbx.ID)
+		}
 
 		// Transition to pausing.
 		if err := w.store.UpdateStatus(sbx.ID, StatusPausing); err != nil {

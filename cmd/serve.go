@@ -223,6 +223,11 @@ var serveCmd = &cobra.Command{
 		idleWatcher := sbxstore.NewIdleWatcher(database, procMgr, sandboxStore, func() time.Duration {
 			return srv.GetEffectiveIdleTimeout()
 		})
+		idleWatcher.SetOnPrePause(func(sandboxID string) {
+			if srv.WeixinBridge != nil {
+				srv.WeixinBridge.StopPollersForSandbox(sandboxID)
+			}
+		})
 		idleWatcher.Start()
 		log.Printf("Idle watcher started (effective timeout: %s)", srv.GetEffectiveIdleTimeout())
 

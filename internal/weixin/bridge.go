@@ -25,6 +25,12 @@ type BridgeDB interface {
 	GetContextToken(sandboxID, botID, userID string) (string, error)
 }
 
+// SandboxResolver looks up the current state of a sandbox.
+// Used by the poller to get the latest PodIP (which changes on Pod restart).
+type SandboxResolver interface {
+	GetPodIP(sandboxID string) string
+}
+
 // BridgeBinding holds the info needed to run a poller for one WeChat binding.
 type BridgeBinding struct {
 	SandboxID     string
@@ -38,16 +44,18 @@ type BridgeBinding struct {
 
 // Bridge manages per-sandbox long-poll goroutines for nanoclaw WeChat bindings.
 type Bridge struct {
-	db      BridgeDB
-	pollers map[string]context.CancelFunc // key: sandboxID:botID
-	mu      sync.Mutex
+	db       BridgeDB
+	resolver SandboxResolver
+	pollers  map[string]context.CancelFunc // key: sandboxID:botID
+	mu       sync.Mutex
 }
 
 // NewBridge creates a new Bridge instance.
-func NewBridge(db BridgeDB) *Bridge {
+func NewBridge(db BridgeDB, resolver SandboxResolver) *Bridge {
 	return &Bridge{
-		db:      db,
-		pollers: make(map[string]context.CancelFunc),
+		db:       db,
+		resolver: resolver,
+		pollers:  make(map[string]context.CancelFunc),
 	}
 }
 
@@ -153,37 +161,47 @@ func (b *Bridge) pollLoop(ctx context.Context, binding BridgeBinding) {
 
 		consecutiveFailures = 0
 
-		// Update cursor
-		if resp.GetUpdatesBuf != "" {
-			getUpdatesBuf = resp.GetUpdatesBuf
-			if err := b.db.UpdateGetUpdatesBuf(binding.SandboxID, binding.BotID, getUpdatesBuf); err != nil {
-				log.Printf("weixin bridge: failed to save cursor sandbox=%s: %v", binding.SandboxID, err)
-			}
-		}
-
-		// Forward each message to NanoClaw pod
+		// Forward messages BEFORE advancing cursor.
+		// If any forward fails, we do NOT advance the cursor so the next
+		// getUpdates returns the same messages and we can retry.
+		allForwarded := true
 		for _, msg := range resp.Msgs {
 			if msg.FromUserID == "" {
 				continue
 			}
-			// Store context token
+			// Store context token (safe to save even if forward fails later;
+			// the token is per-user state, not per-message)
 			if msg.ContextToken != "" {
 				if err := b.db.UpsertContextToken(binding.SandboxID, binding.BotID, msg.FromUserID, msg.ContextToken); err != nil {
 					log.Printf("weixin bridge: failed to save context token: %v", err)
 				}
 			}
 
-			// Extract text from message
 			text := extractText(msg)
 			if text == "" {
 				continue
 			}
 
-			// Forward to NanoClaw pod
 			if err := b.forwardToNanoClaw(ctx, binding, msg.FromUserID, text); err != nil {
-				log.Printf("weixin bridge: forward failed sandbox=%s from=%s: %v",
+				log.Printf("weixin bridge: forward failed sandbox=%s from=%s: %v (will retry next poll)",
 					binding.SandboxID, msg.FromUserID, err)
+				allForwarded = false
+				break // stop processing remaining messages; retry all on next poll
 			}
+		}
+
+		// Only advance cursor after ALL messages are successfully forwarded.
+		// This ensures no messages are lost if the NanoClaw pod is unreachable.
+		if allForwarded && resp.GetUpdatesBuf != "" {
+			getUpdatesBuf = resp.GetUpdatesBuf
+			if err := b.db.UpdateGetUpdatesBuf(binding.SandboxID, binding.BotID, getUpdatesBuf); err != nil {
+				log.Printf("weixin bridge: failed to save cursor sandbox=%s: %v", binding.SandboxID, err)
+			}
+		}
+
+		// If forwarding failed, back off before retrying to avoid hammering iLink
+		if !allForwarded {
+			sleepCtx(ctx, bridgeRetryDelay)
 		}
 	}
 }
@@ -199,7 +217,14 @@ func extractText(msg WeixinMessage) string {
 }
 
 // forwardToNanoClaw sends a message to the NanoClaw pod's weixin channel HTTP endpoint.
+// PodIP is resolved dynamically via the SandboxResolver to handle Pod restarts.
 func (b *Bridge) forwardToNanoClaw(ctx context.Context, binding BridgeBinding, fromUserID, text string) error {
+	// Resolve current PodIP — it may have changed since the poller started.
+	podIP := b.resolver.GetPodIP(binding.SandboxID)
+	if podIP == "" {
+		return fmt.Errorf("sandbox %s has no PodIP (pod may be down or paused)", binding.SandboxID)
+	}
+
 	msg := map[string]interface{}{
 		"id":          fmt.Sprintf("weixin-%d", time.Now().UnixMilli()),
 		"chat_jid":    fromUserID,
@@ -214,7 +239,7 @@ func (b *Bridge) forwardToNanoClaw(ctx context.Context, binding BridgeBinding, f
 		return fmt.Errorf("marshal message: %w", err)
 	}
 
-	url := fmt.Sprintf("http://%s:3002/message", binding.PodIP)
+	url := fmt.Sprintf("http://%s:3002/message", podIP)
 	ctx, cancel := context.WithTimeout(ctx, forwardTimeout)
 	defer cancel()
 

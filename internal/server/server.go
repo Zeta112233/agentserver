@@ -95,7 +95,7 @@ func New(a *auth.Auth, oidcMgr *auth.OIDCManager, database *db.DB, sandboxStore 
 		OpenclawSubdomainPrefix: openclawPrefix,
 		PasswordAuthEnabled:     passwordAuthEnabled,
 	}
-	s.WeixinBridge = weixin.NewBridge(database)
+	s.WeixinBridge = weixin.NewBridge(database, sandboxStore)
 	s.restoreWeixinBridgePollers()
 	if s.OIDC != nil {
 		s.OIDC.OnUserCreated = s.createDefaultWorkspace
@@ -1439,6 +1439,11 @@ func (s *Server) handlePauseSandbox(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Stop WeChat bridge pollers before pausing (pod will be gone).
+	if sbx.Type == "nanoclaw" && s.WeixinBridge != nil {
+		s.WeixinBridge.StopPollersForSandbox(id)
+	}
+
 	// Pause asynchronously.
 	go func() {
 		if err := s.ProcessManager.Pause(id); err != nil {
@@ -1510,6 +1515,13 @@ func (s *Server) handleResumeSandbox(w http.ResponseWriter, r *http.Request) {
 		}
 		s.Sandboxes.UpdateActivity(id)
 		s.Sandboxes.UpdateStatus(id, sbxstore.StatusRunning)
+
+		// Restart WeChat bridge pollers for nanoclaw sandboxes after resume.
+		// The Pod has a new IP; pollers were stopped during pause.
+		sbxNow, ok := s.Sandboxes.Get(id)
+		if ok && sbxNow.Type == "nanoclaw" && s.WeixinBridge != nil {
+			s.restoreWeixinBridgePollersForSandbox(id)
+		}
 	}()
 
 	w.Header().Set("Content-Type", "application/json")
@@ -1686,6 +1698,34 @@ func (s *Server) restoreWeixinBridgePollers() {
 	}
 	if restored > 0 {
 		log.Printf("weixin bridge restore: started %d poller(s)", restored)
+	}
+}
+
+// restoreWeixinBridgePollersForSandbox restarts pollers for a single sandbox.
+// Called after sandbox resume when the Pod has a new IP.
+func (s *Server) restoreWeixinBridgePollersForSandbox(sandboxID string) {
+	bindings, err := s.DB.GetBindingsWithBotToken()
+	if err != nil {
+		log.Printf("weixin bridge restore for %s: failed to query bindings: %v", sandboxID, err)
+		return
+	}
+	sbx, ok := s.Sandboxes.Get(sandboxID)
+	if !ok || sbx.PodIP == "" {
+		return
+	}
+	for _, b := range bindings {
+		if b.SandboxID != sandboxID {
+			continue
+		}
+		s.WeixinBridge.StartPoller(weixin.BridgeBinding{
+			SandboxID:     b.SandboxID,
+			BotID:         b.BotID,
+			BotToken:      b.BotToken,
+			ILinkBaseURL:  b.ILinkBaseURL,
+			GetUpdatesBuf: b.GetUpdatesBuf,
+			PodIP:         sbx.PodIP,
+			BridgeSecret:  sbx.NanoclawBridgeSecret,
+		})
 	}
 }
 

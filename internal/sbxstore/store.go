@@ -66,6 +66,16 @@ func (s *Store) Create(id, workspaceID, name, sandboxType, sandboxName, opencode
 	}, nil
 }
 
+// GetPodIP returns the current PodIP for a sandbox, or "" if not found/not running.
+// Implements the weixin.SandboxResolver interface.
+func (s *Store) GetPodIP(sandboxID string) string {
+	sbx, ok := s.Get(sandboxID)
+	if !ok {
+		return ""
+	}
+	return sbx.PodIP
+}
+
 // Get returns a sandbox from DB.
 func (s *Store) Get(id string) (*Sandbox, bool) {
 	dbSbx, err := s.db.GetSandbox(id)
