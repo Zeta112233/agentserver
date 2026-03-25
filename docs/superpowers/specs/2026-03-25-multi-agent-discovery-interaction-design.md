@@ -58,6 +58,47 @@ The design draws from industry research across major multi-agent frameworks:
 
 ---
 
+## Interaction Model Clarification
+
+This system provides **two distinct interaction layers** that serve different purposes:
+
+| Layer | Tools | Who Uses It | Purpose |
+|-------|-------|-------------|---------|
+| **Task Delegation** | `discover_agents`, `delegate_task`, `check_task` | AI model (via injected MCP tools) | High-level: "review this code", "translate this document" |
+| **MCP Tool Proxy** | `agent/{id}/tool_name` | Task executors (internal infrastructure) | Low-level: "read a file on agent A's filesystem", "run a command on agent B" |
+
+**Task Delegation** is the primary, AI-model-facing interaction. The AI model calls `discover_agents` to find peers, `delegate_task` to send work, and `check_task` to retrieve results. These three tools are all the AI model needs.
+
+**MCP Tool Proxy** is internal infrastructure used by task executors during task execution. For example, when Agent B receives a code review task, its task executor might need to read files from Agent A's filesystem — it does this via the MCP proxy, calling `agent/{agent-a-id}/read_file`. This is a programmatic call made by the task executor, not by the AI model directly. Remote agent tools are NOT injected into the AI model's tool list.
+
+## Data Access: How Agents Share Files
+
+Agents have isolated filesystems (separate containers or machines). When Agent A delegates a task to Agent B that involves files, the data access mechanism depends on the deployment topology:
+
+**Cloud agents in the same workspace:**
+- **Shared workspace volumes**: The existing `workspace_volumes` table supports mounting K8s PVCs to multiple sandboxes. All cloud agents in a workspace can mount the same volume at a configured path, giving them shared read/write access to a common filesystem.
+- This is the primary mechanism for cloud-to-cloud collaboration.
+
+**Cross-environment (local→cloud or cloud→local):**
+- **MCP Tool Proxy callback**: During task execution, the target agent's task executor calls back to the requester's `read_file` tool via the MCP proxy to fetch needed files. This is transparent to the AI model.
+- **Task payload embedding**: For small inputs (code snippets, text), the file content can be embedded directly in the task's `input` field.
+- **Git-based sharing**: For code review tasks, the task input can include a git remote URL + branch/commit. The target agent clones the repo independently.
+
+**The task input schema should indicate which data access method to use:**
+```json
+{
+  "skill": "code-review",
+  "input": {
+    "data_access": "shared_volume",    // or "callback" or "embedded" or "git"
+    "path": "/workspace/src/server",   // for shared_volume
+    "git_url": "...",                  // for git
+    "git_ref": "main",                // for git
+    "files": { "main.go": "..." },    // for embedded
+    "focus": "bugs and security"
+  }
+}
+```
+
 ## Architecture Overview
 
 ```
@@ -107,24 +148,26 @@ The design draws from industry research across major multi-agent frameworks:
 The Agent Card is the core data structure for capability description. Every sandbox publishes a card.
 
 ```go
-// AgentCard represents an agent's capabilities and metadata
+// AgentCard represents an agent's capabilities and metadata.
+// When stored in DB: Type and Status live in indexed columns, NOT in card_json.
+// When returned via API: the server merges columns + JSON into this struct.
 type AgentCard struct {
-    // Identity
+    // Identity (Type comes from agent_cards.agent_type column, not JSON)
     AgentID     string    `json:"agent_id"`       // sandbox ID
     Name        string    `json:"name"`            // human-readable name
-    Type        string    `json:"type"`            // "opencode" | "openclaw" | "nanoclaw"
+    Type        string    `json:"type"`            // "opencode" | "openclaw" | "nanoclaw" (from column)
     Description string    `json:"description"`     // what this agent does
 
-    // Capabilities
+    // Capabilities (stored in card_json)
     Skills      []Skill   `json:"skills"`          // high-level skill descriptions
     MCPTools    []MCPTool `json:"mcp_tools"`       // MCP tools this agent exposes
 
-    // Availability
-    Status      string    `json:"status"`          // "available" | "busy" | "offline"
+    // Availability (Status comes from agent_cards.agent_status column, not JSON)
+    Status      string    `json:"status"`          // "available" | "busy" | "offline" (from column)
     IsLocal     bool      `json:"is_local"`        // local vs cloud agent
-    LastSeenAt  time.Time `json:"last_seen_at"`    // last heartbeat
+    LastSeenAt  time.Time `json:"last_seen_at"`    // last heartbeat (from agent_info table)
 
-    // Interaction
+    // Interaction (stored in card_json)
     SupportedModes []string `json:"supported_modes"` // ["sync", "async", "stream"]
     MaxConcurrency int     `json:"max_concurrency"`  // how many tasks simultaneously
 }
@@ -164,12 +207,12 @@ CREATE INDEX idx_agent_cards_type ON agent_cards(agent_type);
 CREATE INDEX idx_agent_cards_status ON agent_cards(agent_status);
 ```
 
-**Design note**: `agent_type` and `agent_status` are denormalized from the JSON blob into indexed columns to enable efficient filtering without full JSON deserialization on every query. The card_json remains the source of truth for the full Agent Card.
+**Design note**: `agent_type` and `agent_status` are indexed columns that live OUTSIDE the JSON blob. The `agent_status` column is the authoritative source of truth for availability status — it is updated both by agent heartbeats and by the `AgentHealthMonitor`. The `card_json` does NOT contain `status` or `type` fields; these are always read from the columns. When constructing an `AgentCard` API response, the server merges the column values with the JSON blob.
 
 **Registration flow:**
 1. Agent starts up and determines its capabilities (type defaults + custom config)
 2. Agent reports its card to the server:
-   - Cloud agents: POST to server endpoint during startup
+   - Cloud agents: The `agentserver-mcp-bridge` process calls `POST /api/agent/discovery/cards` during startup. It knows the agentserver URL via the `AGENTSERVER_URL` environment variable (injected during container creation alongside existing env vars like `ANTHROPIC_BASE_URL` and proxy tokens).
    - Local agents: Send card via WebSocket tunnel alongside `agent_info`
 3. Server stores the card in `agent_cards` table
 4. On capability change, agent re-reports with incremented version
@@ -199,7 +242,8 @@ GET  /api/agent/discovery/agents
        "agents": [AgentCard, ...],
        "total": 15
      }
-     Note: workspace is resolved from the authenticated sandbox's workspace_id
+     Note: workspace is resolved from the authenticated sandbox's workspace_id.
+           The requesting agent is always excluded from results (no self-discovery).
 
 GET  /api/agent/discovery/agents/{sandbox_id}
      Auth: proxy_token (AgentAuthMiddleware)
@@ -261,6 +305,7 @@ CREATE TABLE agent_tasks (
     mode TEXT NOT NULL DEFAULT 'async',
     failure_reason TEXT,
     timeout_seconds INTEGER DEFAULT 300,
+    delegation_chain TEXT NOT NULL DEFAULT '[]',  -- JSON array of sandbox IDs for loop detection
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     accepted_at TIMESTAMPTZ,
     completed_at TIMESTAMPTZ
@@ -269,6 +314,7 @@ CREATE TABLE agent_tasks (
 CREATE INDEX idx_agent_tasks_workspace ON agent_tasks(workspace_id);
 CREATE INDEX idx_agent_tasks_requester ON agent_tasks(requester_id);
 CREATE INDEX idx_agent_tasks_target_status ON agent_tasks(target_id, status);
+CREATE INDEX idx_agent_tasks_cleanup ON agent_tasks(status, completed_at);
 ```
 
 **Delegation endpoints:**
@@ -368,6 +414,28 @@ Each agent type needs a **task executor** component that:
 
 This task executor is new infrastructure that must be built for each agent type. For cloud agents, it's a lightweight HTTP server running alongside the main process. For local agents, it's integrated into the agent CLI process that manages the WebSocket tunnel.
 
+**Delegation loop detection:**
+
+Each task carries a `delegation_chain` field — an ordered list of agent IDs that have participated in the delegation chain. When Agent A creates a task, the chain is `["agent-a"]`. If Agent B receives the task and decides to sub-delegate, the new task's chain becomes `["agent-a", "agent-b"]`. Before creating a task, the server checks: if `target_id` already appears in the `delegation_chain`, the task is rejected with reason `delegation_loop_detected`. The chain has a max depth of 5 to prevent excessively deep delegation trees.
+
+```sql
+-- Add to agent_tasks table:
+delegation_chain TEXT DEFAULT '[]',  -- JSON array of sandbox IDs
+```
+
+**Task overflow handling:**
+
+When an agent is at `max_concurrency` (status `busy`), new task requests are **rejected** with status `rejected` and reason `at_capacity`. The server does NOT queue tasks — the requester is expected to:
+1. Try a different agent via `discover_agents` (which excludes `busy` agents by default)
+2. Wait and retry later
+3. Report to the user that no agent is available
+
+This keeps the system simple and avoids hidden queuing complexity.
+
+**Task cleanup:**
+
+Completed and failed tasks are retained for 7 days, then automatically deleted by a background goroutine (`TaskCleanupWorker`) that runs daily. This prevents unbounded growth of the `agent_tasks` table. The `agent_interactions` audit table is NOT cleaned up — it serves as a permanent audit trail.
+
 **Human-in-the-loop mechanisms:**
 
 1. **Confidence-based surfacing**: The AI model decides when to ask the human. The system provides the tools; the model's own judgment determines when a delegation is "obvious" vs. "needs confirmation."
@@ -410,6 +478,8 @@ This task executor is new infrastructure that must be built for each agent type.
 ```
 
 ### 5. MCP Proxy & Tool Namespacing
+
+> **Note**: The MCP Proxy is internal infrastructure used by task executors during task execution. It is NOT exposed to the AI model as injected tools. The AI model interacts only via `discover_agents`, `delegate_task`, and `check_task`. See the "Interaction Model Clarification" section above.
 
 **Prerequisite: Agent-side MCP server**
 
@@ -568,10 +638,37 @@ All agent types receive three injected MCP tools: `discover_agents`, `delegate_t
 
 | Agent Type | Injection Method | How It Works |
 |------------|-----------------|--------------|
-| **opencode** | `OPENCODE_CONFIG_CONTENT` env var | Add tools to the MCP tools section of the opencode config JSON |
+| **opencode** | `OPENCODE_CONFIG_CONTENT` env var | Add an MCP server entry pointing to the agentserver bridge process (see below) |
 | **openclaw** | `openclaw.json` gateway config | Add as a built-in plugin/channel in the gateway configuration |
 | **nanoclaw** | Environment variables | Set `AGENTSERVER_TASK_API_URL` and `AGENTSERVER_TASK_API_TOKEN` for the bridge to call |
 | **local agents** | WebSocket tunnel `inject_tools` frame | See below for frame specification |
+
+**Agentserver Bridge MCP Server:**
+
+The three injected tools (`discover_agents`, `delegate_task`, `check_task`) need to be callable by the AI model via the MCP protocol. Since the actual implementation is HTTP calls to agentserver's `/api/agent/` endpoints, a **bridge MCP server** is needed to translate MCP tool calls → HTTP requests.
+
+For **cloud agents**: A lightweight bridge process (`agentserver-mcp-bridge`) is started alongside the main agent process in the container. It:
+1. Exposes a stdio-based MCP server (stdin/stdout JSON-RPC)
+2. Receives tool calls from the AI model via the MCP protocol
+3. Translates them to HTTP requests to `$AGENTSERVER_URL/api/agent/...` with the `proxy_token`
+4. Returns the HTTP response as the MCP tool result
+
+The bridge is configured in opencode's MCP server list via `OPENCODE_CONFIG_CONTENT`:
+```json
+{
+  "mcpServers": {
+    "agentserver": {
+      "command": "/usr/local/bin/agentserver-mcp-bridge",
+      "env": {
+        "AGENTSERVER_URL": "https://...",
+        "AGENTSERVER_TOKEN": "<proxy_token>"
+      }
+    }
+  }
+}
+```
+
+For **local agents**: The local agent CLI process (`agentserver-agent`) itself acts as the bridge. When it receives `inject_tools` frames, it starts a local stdio MCP server that opencode connects to (see frame spec below).
 
 **`inject_tools` tunnel frame specification:**
 
@@ -647,13 +744,20 @@ Agents extend defaults with custom skills and tools based on their specific conf
 5. AI calls delegate_task({
      target_id: "cloud-go-reviewer",
      skill: "code-review",
-     input: { path: "/src/server", focus: "bugs and security issues" },
+     input: {
+       data_access: "callback",           // target will read files via MCP proxy
+       path: "/src/server",
+       focus: "bugs and security issues"
+     },
      mode: "async"
    })
 
-6. Server creates task (status: pending), forwards to Go Reviewer via HTTP
+6. Server creates task (status: pending, delegation_chain: ["local-opencode"]),
+   forwards to Go Reviewer via HTTP
    → Go Reviewer accepts (status: accepted → running)
-   → Go Reviewer performs code review
+   → Go Reviewer's task executor reads files from Local Opencode via MCP proxy:
+     calls agent/{local-opencode-id}/read_file → server proxies via WS tunnel
+   → Go Reviewer performs code review on the fetched files
    → Go Reviewer completes (status: completed, output: { findings: [...] })
 
 7. Local Opencode polls with check_task({ task_id: "task-123" })
@@ -704,6 +808,7 @@ CREATE TABLE agent_tasks (
     mode TEXT NOT NULL DEFAULT 'async',
     failure_reason TEXT,
     timeout_seconds INTEGER DEFAULT 300,
+    delegation_chain TEXT NOT NULL DEFAULT '[]',  -- JSON array of sandbox IDs for loop detection
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     accepted_at TIMESTAMPTZ,
     completed_at TIMESTAMPTZ
@@ -712,6 +817,7 @@ CREATE TABLE agent_tasks (
 CREATE INDEX idx_agent_tasks_workspace ON agent_tasks(workspace_id);
 CREATE INDEX idx_agent_tasks_requester ON agent_tasks(requester_id);
 CREATE INDEX idx_agent_tasks_target_status ON agent_tasks(target_id, status);
+CREATE INDEX idx_agent_tasks_cleanup ON agent_tasks(status, completed_at);  -- for TTL cleanup
 
 -- Audit log for inter-agent interactions
 -- Intentionally no FK constraints: audit records survive entity deletion
