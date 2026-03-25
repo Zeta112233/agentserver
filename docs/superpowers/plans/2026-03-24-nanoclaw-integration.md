@@ -793,152 +793,518 @@ If any build issues found, fix and commit.
 
 ## Phase 3: WeChat Message Bridge
 
-> **BLOCKED:** Phase 3 requires investigating the iLink message API first (spec "Phase 0"). The current `internal/weixin/ilink.go` only implements QR scan flow — message send/receive is entirely new functionality. Before implementing these tasks, confirm:
-> 1. Does iLink support webhook/push delivery of inbound messages?
-> 2. What is the message send API format?
-> 3. How are bot credentials used for messaging?
+> **Investigation complete.** See `docs/superpowers/specs/2026-03-25-ilink-api-investigation.md`.
 >
-> If iLink only supports polling, the bridge architecture in Task 13 changes significantly.
+> Key finding: iLink uses **long-polling** (not webhooks). agentserver must run a per-sandbox
+> polling goroutine that calls `getUpdates` in a loop, then forwards messages to the NanoClaw pod.
+>
+> Tasks 12-14 are already implemented. Tasks 15-21 are the remaining work.
 
-### Task 12: DB Migration for WeChat Bridge Credentials
+### Task 12: DB Migration for WeChat Bridge Credentials — DONE
 
-**Files:**
-- Create: `internal/db/migrations/009_nanoclaw_weixin_bridge.sql`
+Already implemented (commit `acc6e9d`).
 
-Note: Must be `009` — follows `008_nanoclaw_bridge_secret.sql` from Phase 1.
+### Task 13: DB Functions for Bridge Credential Lookup — DONE
 
-- [ ] **Step 1: Create migration**
+Already implemented (commit `749082d`).
 
-```sql
--- Add bridge-mode credential columns to sandbox_weixin_bindings.
--- Used by nanoclaw sandboxes where agentserver bridges messages.
-ALTER TABLE sandbox_weixin_bindings ADD COLUMN bot_token TEXT;
-ALTER TABLE sandbox_weixin_bindings ADD COLUMN ilink_base_url TEXT;
-ALTER TABLE sandbox_weixin_bindings ADD COLUMN webhook_registered BOOLEAN DEFAULT FALSE;
+### Task 14: Update saveWeixinCredentials for NanoClaw Bridge Mode — DONE
 
--- Index for reverse lookup: given a bot_id from iLink webhook, find the sandbox.
-CREATE INDEX IF NOT EXISTS idx_weixin_bindings_bot_id ON sandbox_weixin_bindings(bot_id);
-```
-
-- [ ] **Step 2: Commit**
-
-```bash
-git add internal/db/migrations/009_nanoclaw_weixin_bridge.sql
-git commit -m "feat(db): add weixin bridge credential columns and bot_id index"
-```
+Already implemented (commit `d344433`).
 
 ---
 
-### Task 13: DB Functions for Bridge Credential Lookup
+### Task 15: DB Migration for Polling State and Context Tokens
 
 **Files:**
-- Modify: `internal/db/weixin_bindings.go`
+- Modify: `internal/db/migrations/009_nanoclaw_weixin_bridge.sql` (append to existing)
 
-Note: This project uses `database/sql` (standard library), NOT pgx. Follow the existing pattern in `weixin_bindings.go` — use `db.QueryRow(query, args...)` and `db.Exec(query, args...)`, no context parameter.
+The long-polling model requires persisting:
+1. `get_updates_buf` — cursor for resuming long-poll after restart
+2. `context_token` — per-user session token that must be echoed in replies
 
-- [ ] **Step 1: Add GetSandboxByBotID function**
+- [ ] **Step 1: Update migration 009 to include polling state columns**
+
+Append to the existing `009_nanoclaw_weixin_bridge.sql`:
+
+```sql
+-- Polling state for long-poll bridge mode.
+-- get_updates_buf is the cursor returned by iLink getUpdates, persisted for restart recovery.
+ALTER TABLE sandbox_weixin_bindings ADD COLUMN get_updates_buf TEXT;
+ALTER TABLE sandbox_weixin_bindings ADD COLUMN last_poll_at TIMESTAMPTZ;
+
+-- Context token store: iLink requires echoing context_token on every outbound message.
+-- One token per sandbox+bot+user triple, updated on each inbound message.
+CREATE TABLE IF NOT EXISTS weixin_context_tokens (
+    sandbox_id TEXT NOT NULL REFERENCES sandboxes(id) ON DELETE CASCADE,
+    bot_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    context_token TEXT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (sandbox_id, bot_id, user_id)
+);
+```
+
+- [ ] **Step 2: Add DB functions for polling state and context tokens**
+
+In `internal/db/weixin_bindings.go`, add:
 
 ```go
-// GetSandboxByBotID returns the sandbox_id for a given WeChat bot_id.
-// Used for routing inbound iLink messages to the correct NanoClaw sandbox.
-func (db *DB) GetSandboxByBotID(botID string) (string, error) {
-	var sandboxID string
+// UpdateGetUpdatesBuf persists the long-poll cursor for a binding.
+func (db *DB) UpdateGetUpdatesBuf(sandboxID, botID, buf string) error {
+	_, err := db.Exec(
+		`UPDATE sandbox_weixin_bindings SET get_updates_buf = $1, last_poll_at = NOW()
+		 WHERE sandbox_id = $2 AND bot_id = $3`,
+		buf, sandboxID, botID,
+	)
+	return err
+}
+
+// GetBindingsWithBotToken returns all nanoclaw bindings that have a bot_token (for starting pollers).
+func (db *DB) GetBindingsWithBotToken() ([]*WeixinBinding, error) {
+	rows, err := db.Query(
+		`SELECT b.id, b.sandbox_id, b.bot_id, b.user_id, b.bound_at, b.bot_token, b.ilink_base_url, b.get_updates_buf
+		 FROM sandbox_weixin_bindings b
+		 JOIN sandboxes s ON s.id = b.sandbox_id
+		 WHERE b.bot_token IS NOT NULL AND s.type = 'nanoclaw' AND s.status = 'running'`)
+	// ... scan and return
+}
+
+// UpsertContextToken stores or updates the context_token for a user conversation.
+func (db *DB) UpsertContextToken(sandboxID, botID, userID, contextToken string) error {
+	_, err := db.Exec(
+		`INSERT INTO weixin_context_tokens (sandbox_id, bot_id, user_id, context_token, updated_at)
+		 VALUES ($1, $2, $3, $4, NOW())
+		 ON CONFLICT (sandbox_id, bot_id, user_id) DO UPDATE SET context_token = $4, updated_at = NOW()`,
+		sandboxID, botID, userID, contextToken,
+	)
+	return err
+}
+
+// GetContextToken retrieves the cached context_token for a user.
+func (db *DB) GetContextToken(sandboxID, botID, userID string) (string, error) {
+	var token string
 	err := db.QueryRow(
-		`SELECT sandbox_id FROM sandbox_weixin_bindings WHERE bot_id = $1 ORDER BY bound_at DESC LIMIT 1`,
-		botID,
-	).Scan(&sandboxID)
+		`SELECT context_token FROM weixin_context_tokens WHERE sandbox_id = $1 AND bot_id = $2 AND user_id = $3`,
+		sandboxID, botID, userID,
+	).Scan(&token)
 	if err != nil {
-		return "", fmt.Errorf("get sandbox by bot ID: %w", err)
+		return "", err
 	}
-	return sandboxID, nil
+	return token, nil
 }
 ```
 
-- [ ] **Step 2: Add SaveBotCredentials function**
+Also add new fields to `WeixinBinding` struct:
 
 ```go
-// SaveBotCredentials stores iLink bot credentials for bridge-mode messaging.
-// Used by nanoclaw sandboxes where agentserver holds the credentials.
-func (db *DB) SaveBotCredentials(sandboxID, botID, botToken, baseURL string) error {
-	_, err := db.Exec(
-		`UPDATE sandbox_weixin_bindings SET bot_token = $1, ilink_base_url = $2
-		 WHERE sandbox_id = $3 AND bot_id = $4`,
-		botToken, baseURL, sandboxID, botID,
-	)
-	if err != nil {
-		return fmt.Errorf("save bot credentials: %w", err)
-	}
-	return nil
+type WeixinBinding struct {
+	ID            int
+	SandboxID     string
+	BotID         string
+	UserID        string
+	BoundAt       time.Time
+	BotToken      string  // iLink bot auth token
+	ILinkBaseURL  string  // iLink API base URL
+	GetUpdatesBuf string  // long-poll cursor
 }
 ```
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add internal/db/weixin_bindings.go
-git commit -m "feat(db): add GetSandboxByBotID and SaveBotCredentials"
+git add internal/db/migrations/009_nanoclaw_weixin_bridge.sql internal/db/weixin_bindings.go
+git commit -m "feat(db): add polling state and context token storage for weixin bridge"
 ```
 
 ---
 
-### Task 14: Update saveWeixinCredentials for NanoClaw Bridge Mode
+### Task 16: iLink Message API Client
 
 **Files:**
-- Modify: `internal/server/server.go`
+- Modify: `internal/weixin/ilink.go`
+- Create: `internal/weixin/ilink_test.go`
 
-- [ ] **Step 1: Implement nanoclaw branch in saveWeixinCredentials**
+Implement the iLink getUpdates and sendMessage APIs in Go, based on the
+`@tencent-weixin/openclaw-weixin` source (see `api/api.ts` and `api/types.ts`).
 
-Replace the placeholder from Task 7 Step 5 with full implementation:
+- [ ] **Step 1: Add message types**
 
 ```go
-if sbx.Type == "nanoclaw" {
-    baseURL := result.BaseURL
-    if baseURL == "" {
-        baseURL = weixin.DefaultAPIBaseURL
-    }
-    // Save binding record first.
-    if dbErr := s.DB.CreateWeixinBinding(sandboxID, accountID, result.UserID); dbErr != nil {
-        return fmt.Errorf("save binding: %w", dbErr)
-    }
-    // Store bot credentials for bridge messaging.
-    if dbErr := s.DB.SaveBotCredentials(sandboxID, accountID, result.Token, baseURL); dbErr != nil {
-        return fmt.Errorf("save bot credentials: %w", dbErr)
-    }
-    // TODO: Register webhook with iLink for inbound message delivery
-    // (blocked on iLink API investigation)
-    return nil
+// WeixinMessage is a message from iLink getUpdates.
+type WeixinMessage struct {
+	Seq           int              `json:"seq,omitempty"`
+	MessageID     int              `json:"message_id,omitempty"`
+	FromUserID    string           `json:"from_user_id,omitempty"`
+	ToUserID      string           `json:"to_user_id,omitempty"`
+	ClientID      string           `json:"client_id,omitempty"`
+	CreateTimeMs  int64            `json:"create_time_ms,omitempty"`
+	SessionID     string           `json:"session_id,omitempty"`
+	MessageType   int              `json:"message_type,omitempty"`   // 1=USER, 2=BOT
+	MessageState  int              `json:"message_state,omitempty"`  // 0=NEW, 1=GENERATING, 2=FINISH
+	ItemList      []MessageItem    `json:"item_list,omitempty"`
+	ContextToken  string           `json:"context_token,omitempty"`
 }
+
+type MessageItem struct {
+	Type     int       `json:"type,omitempty"`  // 1=TEXT, 2=IMAGE, 3=VOICE, 4=FILE, 5=VIDEO
+	TextItem *TextItem `json:"text_item,omitempty"`
+}
+
+type TextItem struct {
+	Text string `json:"text,omitempty"`
+}
+
+type GetUpdatesRequest struct {
+	GetUpdatesBuf string   `json:"get_updates_buf"`
+	BaseInfo      BaseInfo `json:"base_info"`
+}
+
+type GetUpdatesResponse struct {
+	Ret                  int              `json:"ret"`
+	ErrCode              int              `json:"errcode,omitempty"`
+	ErrMsg               string           `json:"errmsg,omitempty"`
+	Msgs                 []WeixinMessage  `json:"msgs,omitempty"`
+	GetUpdatesBuf        string           `json:"get_updates_buf,omitempty"`
+	LongPollingTimeoutMs int              `json:"longpolling_timeout_ms,omitempty"`
+}
+
+type SendMessageRequest struct {
+	Msg      WeixinMessage `json:"msg"`
+	BaseInfo BaseInfo      `json:"base_info"`
+}
+
+type BaseInfo struct {
+	ChannelVersion string `json:"channel_version,omitempty"`
+}
+```
+
+- [ ] **Step 2: Add GetUpdates function**
+
+```go
+const (
+	defaultLongPollTimeout = 35 * time.Second
+	defaultAPITimeout      = 15 * time.Second
+	channelVersion         = "agentserver-bridge-1.0"
+)
+
+// GetUpdates long-polls iLink for new messages. Returns empty response on client timeout.
+func GetUpdates(ctx context.Context, apiBaseURL, botToken, getUpdatesBuf string) (*GetUpdatesResponse, error) {
+	body := GetUpdatesRequest{
+		GetUpdatesBuf: getUpdatesBuf,
+		BaseInfo:      BaseInfo{ChannelVersion: channelVersion},
+	}
+	// POST to {baseUrl}/ilink/bot/getupdates
+	// Headers: Authorization: Bearer {botToken}, AuthorizationType: ilink_bot_token
+	// Timeout: 35s (server holds request)
+	// On client timeout: return empty {Ret:0, Msgs:[]}
+}
+```
+
+- [ ] **Step 3: Add SendMessage function**
+
+```go
+// SendTextMessage sends a text message to a WeChat user via iLink.
+func SendTextMessage(ctx context.Context, apiBaseURL, botToken, toUserID, text, contextToken string) error {
+	clientID := fmt.Sprintf("agentserver-%d", time.Now().UnixMilli())
+	body := SendMessageRequest{
+		Msg: WeixinMessage{
+			ToUserID:     toUserID,
+			ClientID:     clientID,
+			MessageType:  2, // BOT
+			MessageState: 2, // FINISH
+			ContextToken: contextToken,
+			ItemList: []MessageItem{{
+				Type:     1, // TEXT
+				TextItem: &TextItem{Text: text},
+			}},
+		},
+		BaseInfo: BaseInfo{ChannelVersion: channelVersion},
+	}
+	// POST to {baseUrl}/ilink/bot/sendmessage
+	// Headers: Authorization: Bearer {botToken}, AuthorizationType: ilink_bot_token
+}
+```
+
+- [ ] **Step 4: Write tests for request building**
+
+Test that `GetUpdatesRequest` and `SendMessageRequest` serialize correctly.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add internal/weixin/ilink.go internal/weixin/ilink_test.go
+git commit -m "feat(weixin): add iLink getUpdates and sendMessage API client"
+```
+
+---
+
+### Task 17: Per-Sandbox Polling Bridge
+
+**Files:**
+- Create: `internal/weixin/bridge.go`
+- Modify: `internal/server/server.go`
+
+This is the core of the bridge: a goroutine per nanoclaw sandbox that long-polls iLink
+for messages and forwards them to the NanoClaw pod.
+
+- [ ] **Step 1: Create bridge.go with the polling loop**
+
+```go
+package weixin
+
+// Bridge manages per-sandbox long-poll goroutines for nanoclaw WeChat bindings.
+type Bridge struct {
+	db       BridgeDB       // interface for DB operations
+	pollers  map[string]context.CancelFunc  // sandboxID+botID → cancel
+	mu       sync.Mutex
+}
+
+// BridgeDB is the DB interface needed by the bridge.
+type BridgeDB interface {
+	GetBindingsWithBotToken() ([]*db.WeixinBinding, error)
+	UpdateGetUpdatesBuf(sandboxID, botID, buf string) error
+	UpsertContextToken(sandboxID, botID, userID, token string) error
+	GetContextToken(sandboxID, botID, userID string) (string, error)
+}
+
+// StartPoller starts a long-poll goroutine for a single binding.
+func (b *Bridge) StartPoller(binding *db.WeixinBinding, podIP string) {
+	// goroutine loop:
+	//   1. Call GetUpdates(baseURL, botToken, getUpdatesBuf)
+	//   2. For each message:
+	//      a. Extract context_token → UpsertContextToken
+	//      b. Extract text from item_list
+	//      c. POST to NanoClaw pod: http://{podIP}:3002/message
+	//   3. Save new get_updates_buf → UpdateGetUpdatesBuf
+	//   4. Handle errors: retry with backoff, session expired pause
+}
+
+// StopPoller stops the polling goroutine for a binding.
+func (b *Bridge) StopPoller(sandboxID, botID string)
+
+// RestorePollers starts pollers for all active nanoclaw WeChat bindings.
+// Called on agentserver startup.
+func (b *Bridge) RestorePollers()
+```
+
+- [ ] **Step 2: Add outbound bridge endpoint to server.go**
+
+```go
+// POST /api/internal/nanoclaw/{id}/weixin/send
+// Called by NanoClaw pod's weixin channel to send a reply.
+// Authenticated via nanoclaw bridge secret.
+func (s *Server) handleNanoclawWeixinSend(w http.ResponseWriter, r *http.Request) {
+	sandboxID := chi.URLParam(r, "id")
+	// Validate bridge secret from Authorization header
+	// Parse body: { bot_id, to_user_id, text }
+	// Look up context_token from DB
+	// Call SendTextMessage(baseURL, botToken, toUserID, text, contextToken)
+}
+```
+
+Register route:
+```go
+r.Post("/api/internal/nanoclaw/{id}/weixin/send", s.handleNanoclawWeixinSend)
+```
+
+- [ ] **Step 3: Start bridge on sandbox start, stop on sandbox stop**
+
+In the sandbox creation flow (after pod is running), if weixin is bound:
+```go
+if sandboxType == "nanoclaw" {
+	s.WeixinBridge.StartPollersForSandbox(id, podIP)
+}
+```
+
+In sandbox stop/delete, stop the pollers:
+```go
+s.WeixinBridge.StopPollersForSandbox(id)
+```
+
+- [ ] **Step 4: Start polling after QR scan confirmation**
+
+In `saveWeixinCredentials` nanoclaw branch, after saving credentials:
+```go
+// Start polling for this newly bound account.
+sbx, _ := s.Sandboxes.Get(sandboxID)
+if sbx != nil && sbx.PodIP != "" {
+    s.WeixinBridge.StartPoller(binding, sbx.PodIP)
+}
+```
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add internal/weixin/bridge.go internal/server/server.go
+git commit -m "feat(weixin): add per-sandbox polling bridge for nanoclaw"
+```
+
+---
+
+### Task 18: NanoClaw Weixin Channel Implementation
+
+**Files:**
+- Create: `nanoclaw-weixin-channel/index.ts`
+
+This is the TypeScript channel implementation that runs inside the NanoClaw container.
+It receives messages from agentserver via HTTP and sends replies back via HTTP callback.
+
+- [ ] **Step 1: Create the channel implementation**
+
+```typescript
+// nanoclaw-weixin-channel/index.ts
+import { registerChannel } from '../registry.js';
+import type { Channel, ChannelOpts, NewMessage } from '../../types.js';
+import http from 'http';
+import https from 'https';
+
+class WeixinChannel implements Channel {
+    name = 'weixin';
+    private server: http.Server;
+    private opts: ChannelOpts;
+    private bridgeURL: string;
+    private bridgeSecret: string;
+    private connected = false;
+
+    constructor(opts: ChannelOpts, bridgeURL: string, bridgeSecret: string) {
+        this.opts = opts;
+        this.bridgeURL = bridgeURL;
+        this.bridgeSecret = bridgeSecret;
+
+        this.server = http.createServer(async (req, res) => {
+            // Auth check
+            if (req.headers['authorization'] !== `Bearer ${this.bridgeSecret}`) {
+                res.writeHead(401); res.end('Unauthorized'); return;
+            }
+            if (req.method === 'GET' && req.url === '/health') {
+                res.writeHead(200); res.end('ok'); return;
+            }
+            if (req.method === 'POST' && req.url === '/message') {
+                const body = await readBody(req);
+                const msg: NewMessage = JSON.parse(body);
+                this.opts.onMessage(msg.chat_jid, msg);
+                res.writeHead(200); res.end('ok');
+                return;
+            }
+            res.writeHead(404); res.end();
+        });
+    }
+
+    async connect() {
+        await new Promise<void>(r => this.server.listen(3002, '0.0.0.0', r));
+        this.connected = true;
+    }
+
+    async sendMessage(jid: string, text: string) {
+        // POST to bridgeURL with {bot_id, to_user_id: jid, text}
+        // agentserver forwards to iLink sendmessage
+    }
+
+    isConnected() { return this.connected; }
+    ownsJid(jid: string) { return jid.endsWith('@im.wechat'); }
+    async disconnect() { this.server.close(); }
+}
+
+registerChannel('weixin', (opts) => {
+    const bridgeURL = process.env.NANOCLAW_WEIXIN_BRIDGE_URL;
+    const bridgeSecret = process.env.NANOCLAW_BRIDGE_SECRET;
+    if (!bridgeURL || !bridgeSecret) return null;
+    return new WeixinChannel(opts, bridgeURL, bridgeSecret);
+});
 ```
 
 - [ ] **Step 2: Commit**
 
 ```bash
-git add internal/server/server.go
-git commit -m "feat(server): save weixin bridge credentials for nanoclaw sandboxes"
+git add nanoclaw-weixin-channel/
+git commit -m "feat: add NanoClaw weixin channel implementation"
 ```
 
 ---
 
-### Task 15: iLink Message Send/Receive API (BLOCKED)
+### Task 19: Update Dockerfile.nanoclaw for Weixin Channel
 
-> **This task is blocked** until the iLink API is investigated. See spec Phase 0.
-> Once the API format is confirmed, implement:
-> - `ilink.go`: `SendMessage(botToken, userID, content)` and `RegisterWebhook(botToken, webhookURL)`
-> - Server endpoint: `POST /api/weixin/message-callback` (receives iLink push)
-> - Server endpoint: `POST /api/internal/nanoclaw/{id}/weixin/send` (NanoClaw → agentserver → iLink)
+**Files:**
+- Modify: `Dockerfile.nanoclaw`
+
+- [ ] **Step 1: Add weixin channel copy and barrel import to Dockerfile**
+
+After the NanoClaw source is cloned and built, add:
+
+```dockerfile
+# Copy weixin channel implementation
+COPY nanoclaw-weixin-channel/ src/channels/weixin/
+
+# Register weixin channel in barrel import
+RUN echo 'import "./weixin/index.js";' >> src/channels/index.ts
+
+# Rebuild with weixin channel
+RUN npm run build
+```
+
+- [ ] **Step 2: Commit**
+
+```bash
+git add Dockerfile.nanoclaw
+git commit -m "feat: add weixin channel to Dockerfile.nanoclaw"
+```
 
 ---
 
-### Task 16: NanoClaw Weixin Channel Implementation (BLOCKED)
+### Task 20: NanoClaw Process Runner Patch
 
-> **Blocked on Task 15.** Once the bridge endpoints exist, implement:
-> - `nanoclaw-weixin-channel/index.ts` — the TypeScript channel implementation
-> - Update Dockerfile.nanoclaw to COPY the channel and add it to the barrel import
+**Files:**
+- Create: `nanoclaw-patches/process-runner.ts`
+- Modify: `Dockerfile.nanoclaw`
+
+When `NANOCLAW_NO_CONTAINER=true`, NanoClaw's container-runner cannot spawn Docker containers.
+This patch adds a process-based fallback that spawns agent-runner as a child process.
+
+- [ ] **Step 1: Create process-runner patch**
+
+```typescript
+// nanoclaw-patches/process-runner.ts
+// Replaces Docker-based agent execution when NANOCLAW_NO_CONTAINER=true.
+// Spawns agent-runner directly as a child process.
+// K8s Pod provides isolation (one NanoClaw instance per sandbox).
+```
+
+Key changes:
+- Check `process.env.NANOCLAW_NO_CONTAINER` at top of `runContainerAgent()`
+- If set, spawn `node agent-runner/dist/index.js` directly via `child_process.spawn()`
+- Pass input via stdin JSON, read output markers from stdout
+- Skip Docker volume mounts, container naming, credential proxy setup
+- Environment variables (ANTHROPIC_BASE_URL, etc.) are already set at Pod level
+
+- [ ] **Step 2: Add to Dockerfile**
+
+```dockerfile
+COPY nanoclaw-patches/process-runner.ts src/process-runner.ts
+```
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add nanoclaw-patches/ Dockerfile.nanoclaw
+git commit -m "feat: add process-runner patch for NanoClaw no-container mode"
+```
 
 ---
 
-### Task 17: NanoClaw Process Runner Patch (BLOCKED)
+### Task 21: Phase 3 Build Verification and Integration Test
 
-> **Blocked on having a working NanoClaw container to test against.**
-> - `nanoclaw-patches/process-runner.ts` — agent execution without Docker
-> - Test by building Dockerfile.nanoclaw and running with `NANOCLAW_NO_CONTAINER=true`
+- [ ] **Step 1: Build backend**
+
+Run: `cd /root/agentserver && go build ./...`
+
+- [ ] **Step 2: Run all tests**
+
+Run: `cd /root/agentserver && go test ./...`
+
+- [ ] **Step 3: Build Dockerfile.nanoclaw**
+
+Run: `docker build -f Dockerfile.nanoclaw -t nanoclaw-test:latest .`
+(May need Docker available; if not, verify Dockerfile syntax only)
+
+- [ ] **Step 4: Commit any fixes**
