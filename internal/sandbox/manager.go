@@ -363,9 +363,10 @@ exec node openclaw.mjs gateway --allow-unconfigured --bind lan`}
 			containerEnv = append(containerEnv, corev1.EnvVar{Name: "OPENCLAW_GATEWAY_TOKEN", Value: opts.OpenclawToken})
 		}
 	case "nanoclaw":
-		if m.cfg.NanoclawImage != "" {
-			sandboxImage = m.cfg.NanoclawImage
+		if m.cfg.NanoclawImage == "" {
+			return "", fmt.Errorf("NANOCLAW_IMAGE not configured: set the environment variable to the nanoclaw container image (build with Dockerfile.nanoclaw)")
 		}
+		sandboxImage = m.cfg.NanoclawImage
 		containerPort = 3002 // Health/bridge endpoint
 		weixinBridgeURL := ""
 		bridgeSecret := ""
