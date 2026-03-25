@@ -362,6 +362,22 @@ exec node openclaw.mjs gateway --allow-unconfigured --bind lan`}
 		if opts.OpenclawToken != "" {
 			containerEnv = append(containerEnv, corev1.EnvVar{Name: "OPENCLAW_GATEWAY_TOKEN", Value: opts.OpenclawToken})
 		}
+	case "nanoclaw":
+		if m.cfg.NanoclawImage != "" {
+			sandboxImage = m.cfg.NanoclawImage
+		}
+		containerPort = 3002 // Health/bridge endpoint
+		weixinBridgeURL := ""
+		bridgeSecret := ""
+		if m.cfg.NanoclawWeixinEnabled && opts.NanoclawBridgeSecret != "" {
+			bridgeSecret = opts.NanoclawBridgeSecret
+		}
+		nanoclawCfg := BuildNanoclawConfig(
+			proxyBaseURL, opts.ProxyToken, "Andy",
+			weixinBridgeURL, bridgeSecret,
+			opts.BYOKBaseURL, opts.BYOKAPIKey,
+		)
+		containerEnv = append(containerEnv, corev1.EnvVar{Name: "NANOCLAW_CONFIG_CONTENT", Value: nanoclawCfg})
 	default: // "opencode"
 		if opts.OpencodeToken != "" {
 			containerEnv = append(containerEnv, corev1.EnvVar{Name: "OPENCODE_SERVER_PASSWORD", Value: opts.OpencodeToken})
@@ -451,6 +467,8 @@ mkdir -p /mnt/session-data/projects
 	switch opts.SandboxType {
 	case "openclaw":
 		workingDir = "/app"
+	case "nanoclaw":
+		workingDir = "/app"
 	}
 
 	mainContainer := corev1.Container{
@@ -480,6 +498,19 @@ mkdir -p /mnt/session-data/projects
 				corev1.ResourceCPU:    cpuQuantity(opts.CPU),
 			},
 		},
+	}
+	if opts.SandboxType == "nanoclaw" {
+		mainContainer.ReadinessProbe = &corev1.Probe{
+			ProbeHandler: corev1.ProbeHandler{
+				HTTPGet: &corev1.HTTPGetAction{
+					Path: "/health",
+					Port: intstr.FromInt32(int32(containerPort)),
+				},
+			},
+			InitialDelaySeconds: 5,
+			PeriodSeconds:       5,
+			FailureThreshold:    30,
+		}
 	}
 	if len(containerCmd) > 0 {
 		mainContainer.Command = containerCmd
@@ -732,6 +763,10 @@ func (m *Manager) runtimeClassNameFor(sandboxType string) *string {
 	case "openclaw":
 		if m.cfg.OpenclawRuntimeClassName != "" {
 			return strPtr(m.cfg.OpenclawRuntimeClassName)
+		}
+	case "nanoclaw":
+		if m.cfg.NanoclawRuntimeClassName != "" {
+			return strPtr(m.cfg.NanoclawRuntimeClassName)
 		}
 	}
 	return m.runtimeClassName()
