@@ -1,0 +1,35 @@
+ARG NANOCLAW_VERSION=main
+FROM node:20-slim AS builder
+
+WORKDIR /app
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y git python3 make g++ && rm -rf /var/lib/apt/lists/*
+
+# Clone NanoClaw source at pinned version
+ARG NANOCLAW_VERSION
+RUN git clone --branch ${NANOCLAW_VERSION} --depth 1 \
+    https://github.com/qwibitai/nanoclaw.git . && \
+    npm ci && npm run build
+
+FROM node:20-slim
+
+WORKDIR /app
+
+# Install Claude Code CLI
+RUN npm install -g @anthropic-ai/claude-code
+
+# Copy built NanoClaw
+COPY --from=builder /app /app
+
+# NanoClaw data directories
+RUN mkdir -p /app/store /app/groups /app/data
+
+# Config injection entrypoint
+COPY nanoclaw-entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+EXPOSE 3002
+
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["node", "dist/index.js"]
