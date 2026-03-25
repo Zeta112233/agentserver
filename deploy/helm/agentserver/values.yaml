@@ -101,6 +101,11 @@ sandbox:
     runtimeClassName: ""
     subdomainPrefix: "claw"  # subdomain: {prefix}-{sessionID}.{baseDomain}
     weixinEnabled: false     # Install and enable the official WeChat channel plugin
+  nanoclaw:
+    image: ""                # e.g. ghcr.io/agentserver/nanoclaw-agent:latest
+    runtimeClassName: ""
+    weixinEnabled: false     # Enable WeChat channel via agentserver bridge
+    bridgeBaseUrl: ""        # agentserver internal URL for NanoClaw pod callbacks (e.g. "http://agentserver.agentserver.svc:8080")
   networkPolicy:
     enabled: false
     # CIDR ranges to deny egress to (internal/private networks).

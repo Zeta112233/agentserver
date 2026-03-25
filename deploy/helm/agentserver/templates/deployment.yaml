@@ -142,6 +142,26 @@ spec:
             - name: OPENCLAW_WEIXIN_ENABLED
               value: "true"
             {{- end }}
+            {{- if .Values.sandbox.nanoclaw.image }}
+            - name: NANOCLAW_IMAGE
+              value: {{ .Values.sandbox.nanoclaw.image | quote }}
+            {{- end }}
+            {{- if .Values.sandbox.nanoclaw.runtimeClassName }}
+            - name: NANOCLAW_RUNTIME_CLASS
+              value: {{ .Values.sandbox.nanoclaw.runtimeClassName | quote }}
+            {{- end }}
+            {{- if .Values.sandbox.nanoclaw.weixinEnabled }}
+            - name: NANOCLAW_WEIXIN_ENABLED
+              value: "true"
+            {{- end }}
+            {{- if .Values.sandbox.nanoclaw.bridgeBaseUrl }}
+            - name: NANOCLAW_BRIDGE_BASE_URL
+              value: {{ .Values.sandbox.nanoclaw.bridgeBaseUrl | quote }}
+            {{- else if .Values.sandbox.nanoclaw.image }}
+            {{- /* Auto-derive bridge base URL from service name when not explicitly set */ -}}
+            - name: NANOCLAW_BRIDGE_BASE_URL
+              value: {{ printf "http://%s.%s.svc:%v" .Release.Name .Release.Namespace (int .Values.service.port) | quote }}
+            {{- end }}
             - name: OPENCODE_SUBDOMAIN_PREFIX
               value: {{ .Values.sandbox.opencode.subdomainPrefix | default "code" | quote }}
             - name: OPENCLAW_SUBDOMAIN_PREFIX
