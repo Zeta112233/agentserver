@@ -138,6 +138,9 @@ func (s *Server) Router() http.Handler {
 	// Internal API for ModelServer token retrieval (no cookie auth).
 	r.Get("/internal/workspaces/{id}/modelserver-token", s.handleInternalModelserverToken)
 
+	// Internal API for NanoClaw pods to send WeChat replies (auth via bridge secret).
+	r.Post("/api/internal/nanoclaw/{id}/weixin/send", s.handleNanoclawWeixinSend)
+
 	// Agent registration (auth via one-time code, no cookie auth needed).
 	r.Post("/api/agent/register", s.handleAgentRegister)
 
@@ -1864,4 +1867,96 @@ func normalizeAccountID(raw string) string {
 		}
 	}
 	return string(out)
+}
+
+// handleNanoclawWeixinSend handles outbound messages from NanoClaw pods.
+// The NanoClaw weixin channel calls this to send replies to WeChat users.
+func (s *Server) handleNanoclawWeixinSend(w http.ResponseWriter, r *http.Request) {
+	sandboxID := chi.URLParam(r, "id")
+
+	sbx, ok := s.Sandboxes.Get(sandboxID)
+	if !ok {
+		http.Error(w, "sandbox not found", http.StatusNotFound)
+		return
+	}
+	if sbx.Type != "nanoclaw" {
+		http.Error(w, "not a nanoclaw sandbox", http.StatusBadRequest)
+		return
+	}
+
+	// Validate bridge secret
+	authHeader := r.Header.Get("Authorization")
+	expectedAuth := "Bearer " + sbx.NanoclawBridgeSecret
+	if sbx.NanoclawBridgeSecret == "" || authHeader != expectedAuth {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	var req struct {
+		BotID    string `json:"bot_id"`
+		ToUserID string `json:"to_user_id"`
+		Text     string `json:"text"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.ToUserID == "" || req.Text == "" {
+		http.Error(w, "to_user_id and text are required", http.StatusBadRequest)
+		return
+	}
+
+	// Look up bot credentials
+	bindings, err := s.DB.ListWeixinBindings(sandboxID)
+	if err != nil || len(bindings) == 0 {
+		http.Error(w, "no weixin binding found", http.StatusNotFound)
+		return
+	}
+	// Find the binding matching bot_id, or use the first one
+	var binding *db.WeixinBinding
+	for _, b := range bindings {
+		if req.BotID == "" || b.BotID == req.BotID {
+			binding = b
+			break
+		}
+	}
+	if binding == nil {
+		http.Error(w, "weixin binding not found for bot_id", http.StatusNotFound)
+		return
+	}
+
+	// Get bot credentials (bot_token is stored via GetBindingsWithBotToken)
+	botBindings, err := s.DB.GetBindingsWithBotToken()
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	var botToken, baseURL string
+	for _, bb := range botBindings {
+		if bb.SandboxID == sandboxID && bb.BotID == binding.BotID {
+			botToken = bb.BotToken
+			baseURL = bb.ILinkBaseURL
+			break
+		}
+	}
+	if botToken == "" {
+		http.Error(w, "bot credentials not found", http.StatusNotFound)
+		return
+	}
+	if baseURL == "" {
+		baseURL = weixin.DefaultAPIBaseURL
+	}
+
+	// Get context token for this user
+	contextToken, _ := s.DB.GetContextToken(sandboxID, binding.BotID, req.ToUserID)
+
+	// Send via iLink
+	if err := weixin.SendTextMessage(r.Context(), baseURL, botToken, req.ToUserID, req.Text, contextToken); err != nil {
+		log.Printf("nanoclaw weixin send: failed sandbox=%s to=%s: %v", sandboxID, req.ToUserID, err)
+		http.Error(w, "failed to send message", http.StatusBadGateway)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "sent"})
 }
