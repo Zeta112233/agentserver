@@ -487,6 +487,8 @@ func (s *Server) toSandboxResponse(r *http.Request, sbx *sbxstore.Sandbox, authT
 		switch sbx.Type {
 		case "openclaw":
 			resp.OpenclawURL = "https://" + s.OpenclawSubdomainPrefix + "-" + subID + "." + domain + "/auth?token=" + authToken
+		case "nanoclaw":
+			// NanoClaw has no Web UI — no URL to generate
 		default: // "opencode"
 			resp.OpencodeURL = "https://" + s.OpencodeSubdomainPrefix + "-" + subID + "." + domain + "/auth?token=" + authToken
 		}
@@ -528,7 +530,7 @@ func (s *Server) toSandboxResponse(r *http.Request, sbx *sbxstore.Sandbox, authT
 
 // attachWeixinBindings fetches and attaches weixin binding records to a sandbox response.
 func (s *Server) attachWeixinBindings(resp *sandboxResponse) {
-	if resp.Type != "openclaw" {
+	if resp.Type != "openclaw" && resp.Type != "nanoclaw" {
 		return
 	}
 	bindings, err := s.DB.ListWeixinBindings(resp.ID)
@@ -1648,8 +1650,8 @@ func (s *Server) handleWeixinQRStart(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.requireWorkspaceMember(w, r, sbx.WorkspaceID); !ok {
 		return
 	}
-	if sbx.Type != "openclaw" {
-		http.Error(w, "weixin login is only available for openclaw sandboxes", http.StatusBadRequest)
+	if sbx.Type != "openclaw" && sbx.Type != "nanoclaw" {
+		http.Error(w, "weixin login is only available for openclaw and nanoclaw sandboxes", http.StatusBadRequest)
 		return
 	}
 	if sbx.Status != "running" {
@@ -1687,8 +1689,8 @@ func (s *Server) handleWeixinQRWait(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.requireWorkspaceMember(w, r, sbx.WorkspaceID); !ok {
 		return
 	}
-	if sbx.Type != "openclaw" {
-		http.Error(w, "weixin login is only available for openclaw sandboxes", http.StatusBadRequest)
+	if sbx.Type != "openclaw" && sbx.Type != "nanoclaw" {
+		http.Error(w, "weixin login is only available for openclaw and nanoclaw sandboxes", http.StatusBadRequest)
 		return
 	}
 	if sbx.Status != "running" {
@@ -1763,15 +1765,28 @@ func statusMessage(status string) string {
 }
 
 func (s *Server) saveWeixinCredentials(ctx context.Context, sandboxID string, result *weixin.StatusResult) error {
+	accountID := normalizeAccountID(result.BotID)
+	if accountID == "" {
+		return fmt.Errorf("empty bot ID from ilink response")
+	}
+
+	// For nanoclaw: store credentials in DB (bridge mode).
+	sbx, ok := s.Sandboxes.Get(sandboxID)
+	if ok && sbx.Type == "nanoclaw" {
+		// Phase 3 will add SaveBotCredentials call here.
+		// For now, just save the binding record.
+		if dbErr := s.DB.CreateWeixinBinding(sandboxID, accountID, result.UserID); dbErr != nil {
+			log.Printf("weixin: failed to save binding record: %v", dbErr)
+		}
+		return nil
+	}
+
+	// Existing openclaw logic: write credentials into pod filesystem.
 	commander, ok := s.ProcessManager.(execCommander)
 	if !ok {
 		return fmt.Errorf("process manager does not support exec")
 	}
 
-	accountID := normalizeAccountID(result.BotID)
-	if accountID == "" {
-		return fmt.Errorf("empty bot ID from ilink response")
-	}
 	baseURL := result.BaseURL
 	if baseURL == "" {
 		baseURL = weixin.DefaultAPIBaseURL
