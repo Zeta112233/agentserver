@@ -153,11 +153,18 @@ type MCPTool struct {
 ```sql
 CREATE TABLE agent_cards (
     sandbox_id TEXT PRIMARY KEY REFERENCES sandboxes(id) ON DELETE CASCADE,
+    agent_type TEXT NOT NULL,                    -- indexed: "opencode" | "openclaw" | "nanoclaw"
+    agent_status TEXT NOT NULL DEFAULT 'available', -- indexed: "available" | "busy" | "offline"
     card_json  TEXT NOT NULL,
     version    INTEGER NOT NULL DEFAULT 1,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE INDEX idx_agent_cards_type ON agent_cards(agent_type);
+CREATE INDEX idx_agent_cards_status ON agent_cards(agent_status);
 ```
+
+**Design note**: `agent_type` and `agent_status` are denormalized from the JSON blob into indexed columns to enable efficient filtering without full JSON deserialization on every query. The card_json remains the source of truth for the full Agent Card.
 
 **Registration flow:**
 1. Agent starts up and determines its capabilities (type defaults + custom config)
@@ -175,50 +182,61 @@ CREATE TABLE agent_cards (
 
 ### 3. Discovery API
 
+**Authentication**: All agent-to-server API calls use a new route group `/api/agent/` that authenticates via `proxy_token` in the `Authorization` header (e.g., `Authorization: Bearer <proxy_token>`). This is separate from the existing cookie-based `/api/` routes used by the web UI. A new `AgentAuthMiddleware` validates the proxy_token, resolves the sandbox, and injects the sandbox context into the request.
+
 **Endpoints:**
 
 ```
-GET  /api/workspaces/{wid}/agent-cards
+GET  /api/agent/discovery/agents
+     Auth: proxy_token (AgentAuthMiddleware)
      Query params:
        ?type=opencode          — filter by agent type
        ?status=available       — filter by availability
        ?skill=code-review      — filter by skill name
        ?tag=go                 — filter by skill tag
+       ?limit=10               — max results (default 10, max 50)
      Response: {
-       "agents": [AgentCard, ...]
+       "agents": [AgentCard, ...],
+       "total": 15
      }
+     Note: workspace is resolved from the authenticated sandbox's workspace_id
 
-GET  /api/workspaces/{wid}/agent-cards/{sandbox_id}
+GET  /api/agent/discovery/agents/{sandbox_id}
+     Auth: proxy_token (AgentAuthMiddleware)
      Response: AgentCard (full, including MCP tool schemas)
 
-POST /api/workspaces/{wid}/agent-cards/{sandbox_id}
-     Auth: sandbox's proxy_token
+POST /api/agent/discovery/cards
+     Auth: proxy_token (AgentAuthMiddleware)
      Body: AgentCard
      Response: { "version": N }
+     Note: sandbox_id is resolved from the authenticated proxy_token, not from the body
 ```
 
 **Capability matching algorithm:**
 
-When an agent queries for a capability, the server returns matching agents ranked by:
+When an agent queries for a capability, the server returns matching agents ranked by priority order (not a weighted score — the ranking is a stable sort applying these criteria in order):
 
-1. **Availability** (weight: critical) — `available` > `busy` with remaining capacity > `offline` (excluded)
-2. **Skill match** (weight: high) — exact skill name match > tag overlap > type-inferred match
-3. **Locality** (weight: medium) — prefer cloud↔cloud or local↔local for lower latency
-4. **Load** (weight: low) — fewer active tasks preferred
+1. **Availability** (filter) — `offline` agents are excluded entirely; `available` sorted before `busy`
+2. **Skill match** (sort) — exact skill name match > tag overlap > type-inferred match
+3. **Locality** (sort) — prefer cloud↔cloud or local↔local for lower latency
+4. **Load** (tiebreaker) — fewer active tasks preferred
+
+The implementation may evolve the ranking formula, but the priority order above is the contract.
 
 **Injected MCP tool:**
 
 ```json
 {
   "name": "discover_agents",
-  "description": "Discover other agents in this workspace by skill, tags, or type. Returns available agents with their capabilities.",
+  "description": "Discover other agents in this workspace by skill, tags, or type. Returns up to 10 available agents with their capabilities.",
   "input_schema": {
     "type": "object",
     "properties": {
       "skill": { "type": "string", "description": "Skill name to search for (e.g., 'code-review')" },
       "tags": { "type": "array", "items": { "type": "string" }, "description": "Tags to match (e.g., ['go', 'python'])" },
       "type": { "type": "string", "enum": ["opencode", "openclaw", "nanoclaw"], "description": "Filter by agent type" },
-      "status": { "type": "string", "enum": ["available", "busy"], "description": "Filter by availability status" }
+      "status": { "type": "string", "enum": ["available", "busy"], "description": "Filter by availability status" },
+      "limit": { "type": "integer", "description": "Max results to return (default 10)", "default": 10 }
     }
   }
 }
@@ -234,51 +252,121 @@ When an agent queries for a capability, the server returns matching agents ranke
 CREATE TABLE agent_tasks (
     id TEXT PRIMARY KEY,
     workspace_id TEXT NOT NULL REFERENCES workspaces(id),
-    requester_id TEXT NOT NULL REFERENCES sandboxes(id),
-    target_id TEXT NOT NULL REFERENCES sandboxes(id),
-    skill TEXT,                          -- requested skill
-    input_json TEXT NOT NULL,            -- task input payload
-    output_json TEXT,                    -- task result
+    requester_id TEXT NOT NULL REFERENCES sandboxes(id) ON DELETE CASCADE,
+    target_id TEXT NOT NULL REFERENCES sandboxes(id) ON DELETE CASCADE,
+    skill TEXT,
+    input_json TEXT NOT NULL,
+    output_json TEXT,
     status TEXT NOT NULL DEFAULT 'pending',
-    mode TEXT NOT NULL DEFAULT 'async',  -- "sync" | "async"
-    failure_reason TEXT,                 -- reason for failure/rejection
+    mode TEXT NOT NULL DEFAULT 'async',
+    failure_reason TEXT,
     timeout_seconds INTEGER DEFAULT 300,
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    accepted_at TIMESTAMP,
-    completed_at TIMESTAMP
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    accepted_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ
 );
 
 CREATE INDEX idx_agent_tasks_workspace ON agent_tasks(workspace_id);
 CREATE INDEX idx_agent_tasks_requester ON agent_tasks(requester_id);
-CREATE INDEX idx_agent_tasks_target ON agent_tasks(target_id, status);
+CREATE INDEX idx_agent_tasks_target_status ON agent_tasks(target_id, status);
 ```
 
-**Delegation endpoint:**
+**Delegation endpoints:**
 
 ```
-POST /api/workspaces/{wid}/tasks
-     Auth: requester's proxy_token
+POST /api/agent/tasks
+     Auth: proxy_token (AgentAuthMiddleware, resolves requester sandbox)
      Body: {
-       "requester_id": "sandbox-a-id",
        "target_id": "sandbox-b-id",         // specific target, OR
        "target_skill": "code-review",        // let server pick best match
        "input": { ... },                     // task payload
        "mode": "sync" | "async",
-       "timeout": 300
+       "timeout": 300                        // seconds (max 600, default 300)
      }
      Response (async): { "task_id": "...", "status": "pending" }
-     Response (sync):  { "task_id": "...", "status": "completed", "output": {...} }
+     Response (sync):  blocks until completion or timeout, then:
+                       { "task_id": "...", "status": "completed", "output": {...} }
+                       On timeout: HTTP 408 { "task_id": "...", "status": "failed",
+                                              "failure_reason": "timeout" }
 
-GET  /api/workspaces/{wid}/tasks/{task_id}
+GET  /api/agent/tasks/{task_id}
+     Auth: proxy_token
      Response: full task record
 
-GET  /api/workspaces/{wid}/tasks?requester={id}&status=running
+GET  /api/agent/tasks?status=running
+     Auth: proxy_token (filters to requester's tasks)
      Response: { "tasks": [...] }
 ```
 
+**Sync mode implementation**: The server holds the HTTP connection open using a blocking channel. A background goroutine monitors task status changes. The connection has a hard timeout of `min(request.timeout, 600)` seconds. If the HTTP connection drops mid-sync, the task continues running — the requester can poll via `GET /api/agent/tasks/{task_id}` to retrieve the result later.
+
 **Task delivery to target agent:**
-- Cloud agents: HTTP POST to pod IP
-- Local agents: Forward via WebSocket tunnel as a new frame type `task_request`
+
+Each agent type must expose a task reception endpoint. The server delivers tasks to this endpoint.
+
+**Cloud agents** — HTTP POST to `http://{pod_ip}:{task_port}/agent/tasks`:
+```json
+// Request from server to cloud agent
+POST /agent/tasks
+Content-Type: application/json
+Authorization: Bearer <internal_task_token>
+
+{
+  "task_id": "task-123",
+  "requester_id": "sandbox-a",
+  "requester_name": "Local Opencode",
+  "skill": "code-review",
+  "input": { "path": "/src/server", "focus": "bugs" }
+}
+
+// Response from cloud agent (immediate)
+HTTP 200
+{
+  "status": "accepted"   // or "rejected" with "reason"
+}
+```
+
+**Local agents** — forwarded via WebSocket tunnel using new frame types:
+
+```
+Frame type: "task_request" (server → agent)
+Payload: {
+  "task_id": "task-123",
+  "requester_id": "sandbox-a",
+  "requester_name": "Local Opencode",
+  "skill": "code-review",
+  "input": { ... }
+}
+
+Frame type: "task_response" (agent → server)
+Payload: {
+  "task_id": "task-123",
+  "status": "accepted" | "rejected" | "running" | "completed" | "failed",
+  "output": { ... },         // present when status is "completed"
+  "failure_reason": "..."    // present when status is "rejected" or "failed"
+}
+```
+
+The agent sends multiple `task_response` frames as the task progresses through its lifecycle (accepted → running → completed/failed). The server updates the `agent_tasks` table on each status change.
+
+**Target-side execution model:**
+
+When an agent receives a task, it must execute it within its own environment:
+
+| Agent Type | Execution Method |
+|------------|-----------------|
+| **opencode** | Injects the task as a new prompt into the opencode conversation via its `/api/chat` endpoint. The task input becomes a system-contextualized user message. The opencode instance runs the task autonomously and reports results. |
+| **openclaw** | Routes the task through the openclaw gateway as a model request. The skill name maps to a preconfigured prompt template. |
+| **nanoclaw** | Forwards the task to the nanoclaw bridge via the existing HTTP bridge interface. The bridge handles autonomous execution. |
+
+Each agent type needs a **task executor** component that:
+1. Receives the task from the server (via HTTP endpoint or tunnel frame)
+2. Translates the task input into the agent's native execution format
+3. Runs the task
+4. Reports status transitions back to the server
+5. Returns the final output
+
+This task executor is new infrastructure that must be built for each agent type. For cloud agents, it's a lightweight HTTP server running alongside the main process. For local agents, it's integrated into the agent CLI process that manages the WebSocket tunnel.
 
 **Human-in-the-loop mechanisms:**
 
@@ -323,26 +411,59 @@ GET  /api/workspaces/{wid}/tasks?requester={id}&status=running
 
 ### 5. MCP Proxy & Tool Namespacing
 
+**Prerequisite: Agent-side MCP server**
+
+Current agents do not expose MCP server endpoints. Each agent type needs a lightweight MCP tool execution server:
+
+| Agent Type | MCP Server Implementation |
+|------------|--------------------------|
+| **opencode** | A sidecar HTTP server (or an extension to opencode's existing HTTP server on port 4096) that exposes `POST /mcp/tools/call`. It translates MCP tool calls into opencode's internal APIs (file read/write, terminal, search). |
+| **openclaw** | An extension to the openclaw gateway (port 18789) that exposes `POST /mcp/tools/call`. It maps MCP tool calls to the gateway's existing model routing and plugin system. |
+| **nanoclaw** | An extension to the nanoclaw bridge HTTP interface that exposes `POST /mcp/tools/call`. It maps MCP tool calls to the bridge's task execution API. |
+
+The MCP tool execution endpoint follows a simple protocol:
+
+```
+POST /mcp/tools/call
+Authorization: Bearer <internal_task_token>
+Content-Type: application/json
+
+{
+  "tool_name": "read_file",
+  "arguments": { "path": "/src/main.go" }
+}
+
+Response:
+{
+  "result": { "content": "package main\n..." },
+  "error": null
+}
+```
+
+This is new infrastructure that must be built per agent type. It is a Phase 3 deliverable.
+
 **Tool namespacing:**
 
-When agent A discovers agent B's MCP tools, the tools are presented with a namespace prefix to prevent collisions:
+When agent A discovers agent B's MCP tools, the tools are presented with a namespace prefix using the sandbox ID (guaranteed unique) and `/` separator:
 
 ```
-agent-{agent_name}::tool_name
+agent/{sandbox_id}/tool_name
 ```
 
-Example: If "Go Reviewer" agent has a tool called `analyze_code`, agent A sees it as `agent-go-reviewer::analyze_code`.
+Example: If agent `abc123` has a tool called `analyze_code`, agent A sees it as `agent/abc123/analyze_code`.
+
+**Design note**: Sandbox ID is used instead of agent name because IDs are guaranteed unique within the system. The `/` separator is used instead of `::` to avoid conflicts with MCP protocol conventions.
 
 **MCP proxy flow:**
 
 ```
-Agent A calls tool "agent-go-reviewer::analyze_code"
-  → Server parses prefix, identifies target agent "Go Reviewer"
+Agent A calls tool "agent/abc123/analyze_code"
+  → Server parses "agent/{id}/{tool}" prefix, resolves target sandbox abc123
   → Server validates: both agents in same workspace? requester authorized?
-  → Server forwards tool call to target agent:
-      - Local agents: via WebSocket tunnel
-      - Cloud agents: via HTTP to pod IP
-  → Target agent executes the tool
+  → Server forwards tool call to target agent's MCP endpoint:
+      - Local agents: via WebSocket tunnel (new frame type "mcp_tool_call" / "mcp_tool_result")
+      - Cloud agents: via HTTP POST to pod-ip:port/mcp/tools/call
+  → Target agent executes the tool via its MCP server
   → Server relays result back to Agent A
   → Server logs the interaction to audit table
 ```
@@ -353,19 +474,25 @@ For cloud-to-cloud MCP tool calls within the same K8s namespace:
 
 1. Agent A calls a namespaced MCP tool
 2. Server checks: both agents are cloud, same namespace
-3. Server issues a short-lived JWT (5min TTL):
+3. Server issues a short-lived JWT (5min TTL) signed with an HMAC-SHA256 symmetric key:
    ```json
    {
      "requester_id": "sandbox-a",
      "target_id": "sandbox-b",
      "workspace_id": "ws-123",
      "allowed_tools": ["analyze_code", "run_tests"],
+     "jti": "unique-jwt-id",
      "exp": 1711382400
    }
    ```
-4. Server returns target's pod IP + port + JWT to Agent A
-5. Agent A calls target directly at `pod-ip:mcp-port` with JWT in Authorization header
+4. Server returns target's pod IP + MCP port + JWT to Agent A
+5. Agent A calls target directly at `pod-ip:mcp-port/mcp/tools/call` with JWT in Authorization header
 6. Server logs interaction metadata (but doesn't proxy the payload)
+
+**JWT signing and validation:**
+- **Signing key**: A symmetric HMAC-SHA256 key, generated by the agentserver at startup and distributed to cloud agents via the `AGENTSERVER_JWT_SECRET` environment variable during container creation
+- **Target validation**: The target agent validates the JWT signature using the shared secret, checks `exp`, verifies `target_id` matches itself, and checks `allowed_tools` contains the requested tool
+- **Revocation**: JWTs include a `jti` (JWT ID). If an agent is terminated, its proxy_token is invalidated — the 5-minute TTL provides a bounded window. For immediate revocation needs, agents can optionally call `GET /api/agent/jwt/validate/{jti}` on the server, but this is not required for normal operation
 
 ### 6. Availability & Health
 
@@ -385,8 +512,16 @@ The existing 20-second agent_info heartbeat is extended to include:
 | `available`/`busy` | `offline` | No heartbeat for 60 seconds (server-computed) |
 | `offline` | `available` | Heartbeat resumes |
 
+**Offline detection mechanism:**
+
+The server runs a background goroutine (`AgentHealthMonitor`) that sweeps the `agent_cards` table every 30 seconds. For each agent with `agent_status != 'offline'`, it checks:
+- Cloud agents: `last_heartbeat_at` from `agent_info` table (or pod health from K8s API)
+- Local agents: `last_heartbeat_at` from tunnel connection
+
+If `now() - last_heartbeat_at > 60s`, the agent is marked `offline`. This is a background sweep, not computed at query time, to ensure consistent status across all concurrent queries.
+
 **Offline handling:**
-1. Server marks agent as `offline` in the card
+1. `AgentHealthMonitor` marks agent as `offline` in the `agent_cards` table
 2. Agent is excluded from discovery results
 3. Pending/running tasks assigned to the offline agent are marked `failed` with reason `agent_offline`
 4. Requesters are notified:
@@ -408,6 +543,8 @@ The existing 20-second agent_info heartbeat is extended to include:
 **Audit logging:**
 
 ```sql
+-- Intentionally no REFERENCES/FK constraints: audit records must survive entity deletion
+-- (sandboxes, workspaces can be deleted while their interaction history is retained)
 CREATE TABLE agent_interactions (
     id TEXT PRIMARY KEY,
     workspace_id TEXT NOT NULL,
@@ -417,10 +554,10 @@ CREATE TABLE agent_interactions (
     detail_json TEXT,               -- request metadata (not full payloads)
     status TEXT NOT NULL,           -- "success" | "failed" | "rejected"
     duration_ms INTEGER,
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX idx_agent_interactions_workspace ON agent_interactions(workspace_id, created_at);
+CREATE INDEX idx_agent_interactions_workspace_time ON agent_interactions(workspace_id, created_at);
 ```
 
 ### 8. Agent-Type Integration
@@ -434,7 +571,43 @@ All agent types receive three injected MCP tools: `discover_agents`, `delegate_t
 | **opencode** | `OPENCODE_CONFIG_CONTENT` env var | Add tools to the MCP tools section of the opencode config JSON |
 | **openclaw** | `openclaw.json` gateway config | Add as a built-in plugin/channel in the gateway configuration |
 | **nanoclaw** | Environment variables | Set `AGENTSERVER_TASK_API_URL` and `AGENTSERVER_TASK_API_TOKEN` for the bridge to call |
-| **local agents** | WebSocket tunnel messages | Server sends tool definitions as a new `inject_tools` tunnel frame type |
+| **local agents** | WebSocket tunnel `inject_tools` frame | See below for frame specification |
+
+**`inject_tools` tunnel frame specification:**
+
+The server sends an `inject_tools` text frame to local agents via the WebSocket tunnel. This frame is sent:
+1. Once immediately after tunnel connection is established
+2. Again whenever the workspace's agent topology changes (new agents join, agents go offline, capabilities change)
+
+```
+Frame type: "inject_tools" (server → agent, text frame)
+Payload: {
+  "tools": [
+    {
+      "name": "discover_agents",
+      "description": "Discover other agents in this workspace...",
+      "input_schema": { ... }
+    },
+    {
+      "name": "delegate_task",
+      "description": "Delegate a task to another agent...",
+      "input_schema": { ... }
+    },
+    {
+      "name": "check_task",
+      "description": "Check the status of a delegated task...",
+      "input_schema": { ... }
+    }
+  ],
+  "api_base_url": "https://agentserver.example.com/api/agent",
+  "auth_token": "<proxy_token>"
+}
+```
+
+**Agent-side handling**: The local agent CLI (`internal/agent/client.go`) must be extended to:
+1. Parse `inject_tools` frames (new handler alongside existing `agent_info` handling)
+2. Register the tools with the running opencode instance via its configuration API
+3. Implement an HTTP handler that the opencode instance calls when these tools are invoked, which proxies the call to the agentserver's `/api/agent/` endpoints
 
 **Default Agent Cards by type:**
 
@@ -503,21 +676,27 @@ Agents extend defaults with custom skills and tools based on their specific conf
 
 ```sql
 -- Migration: XXX_multi_agent_discovery.sql
+-- Note: Uses TIMESTAMPTZ consistently to match existing schema conventions
 
 -- Agent capability cards
 CREATE TABLE agent_cards (
     sandbox_id TEXT PRIMARY KEY REFERENCES sandboxes(id) ON DELETE CASCADE,
+    agent_type TEXT NOT NULL,
+    agent_status TEXT NOT NULL DEFAULT 'available',
     card_json TEXT NOT NULL,
     version INTEGER NOT NULL DEFAULT 1,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE INDEX idx_agent_cards_type ON agent_cards(agent_type);
+CREATE INDEX idx_agent_cards_status ON agent_cards(agent_status);
 
 -- Inter-agent tasks
 CREATE TABLE agent_tasks (
     id TEXT PRIMARY KEY,
     workspace_id TEXT NOT NULL REFERENCES workspaces(id),
-    requester_id TEXT NOT NULL REFERENCES sandboxes(id),
-    target_id TEXT NOT NULL REFERENCES sandboxes(id),
+    requester_id TEXT NOT NULL REFERENCES sandboxes(id) ON DELETE CASCADE,
+    target_id TEXT NOT NULL REFERENCES sandboxes(id) ON DELETE CASCADE,
     skill TEXT,
     input_json TEXT NOT NULL,
     output_json TEXT,
@@ -525,9 +704,9 @@ CREATE TABLE agent_tasks (
     mode TEXT NOT NULL DEFAULT 'async',
     failure_reason TEXT,
     timeout_seconds INTEGER DEFAULT 300,
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    accepted_at TIMESTAMP,
-    completed_at TIMESTAMP
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    accepted_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ
 );
 
 CREATE INDEX idx_agent_tasks_workspace ON agent_tasks(workspace_id);
@@ -535,6 +714,7 @@ CREATE INDEX idx_agent_tasks_requester ON agent_tasks(requester_id);
 CREATE INDEX idx_agent_tasks_target_status ON agent_tasks(target_id, status);
 
 -- Audit log for inter-agent interactions
+-- Intentionally no FK constraints: audit records survive entity deletion
 CREATE TABLE agent_interactions (
     id TEXT PRIMARY KEY,
     workspace_id TEXT NOT NULL,
@@ -544,7 +724,7 @@ CREATE TABLE agent_interactions (
     detail_json TEXT,
     status TEXT NOT NULL,
     duration_ms INTEGER,
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX idx_agent_interactions_workspace_time ON agent_interactions(workspace_id, created_at);
@@ -558,36 +738,41 @@ ALTER TABLE workspaces ADD COLUMN delegation_mode TEXT NOT NULL DEFAULT 'auto';
 ## Implementation Phases
 
 ### Phase 1: Foundation (Agent Cards + Discovery)
-- Database migration for `agent_cards` table
+- `AgentAuthMiddleware` for proxy_token-based `/api/agent/` route group
+- Database migration for `agent_cards` table (with indexed type/status columns)
 - Agent Card Go types and validation
-- Card registration endpoint (POST)
-- Card discovery endpoint (GET with filters)
+- Card registration endpoint (`POST /api/agent/discovery/cards`)
+- Card discovery endpoint (`GET /api/agent/discovery/agents` with filters and pagination)
 - Default card generation per agent type
 - Extend heartbeat to carry card version + status
+- `AgentHealthMonitor` background goroutine for offline detection
 
 ### Phase 2: Task Delegation
 - Database migration for `agent_tasks` table
-- Task creation endpoint with server-side agent matching
-- Task delivery to cloud agents (HTTP) and local agents (tunnel)
+- Task creation endpoint (`POST /api/agent/tasks`) with server-side agent matching
+- Task delivery to cloud agents (HTTP `POST /agent/tasks`) and local agents (tunnel `task_request`/`task_response` frames)
+- Task executor infrastructure per agent type (opencode, openclaw, nanoclaw)
 - Task status tracking and result storage
-- Sync and async delegation modes
-- Timeout handling
+- Sync mode (blocking with timeout) and async mode
+- Timeout handling and offline failure recovery
+- **Rate limiting**: Per-agent rate limits on task creation (default: 10 tasks/min) and per-workspace aggregate limits (default: 50 tasks/min) to prevent delegation loops
 
 ### Phase 3: MCP Integration
-- MCP proxy in the server (parse namespaced tool calls, forward to target)
-- Tool injection into agent configs (opencode, openclaw, nanoclaw)
-- `discover_agents`, `delegate_task`, `check_task` tool implementations
-- Tool namespacing logic
+- **Agent-side MCP server**: Build `POST /mcp/tools/call` endpoint for each agent type (opencode, openclaw, nanoclaw)
+- MCP proxy in the server (parse `agent/{id}/tool` namespaced tool calls, forward to target)
+- Tool injection into agent configs (opencode env var, openclaw gateway config, nanoclaw env vars)
+- `inject_tools` tunnel frame type for local agents (with agent-side handler in `internal/agent/client.go`)
+- `discover_agents`, `delegate_task`, `check_task` MCP tool implementations
+- Tool namespacing logic (`agent/{sandbox_id}/tool_name`)
 
 ### Phase 4: Direct Fast-Path & Security
-- JWT issuance for direct K8s pod-to-pod MCP calls
-- MCP endpoint on each cloud agent for direct calls
+- JWT issuance (HMAC-SHA256 with `AGENTSERVER_JWT_SECRET`) for direct K8s pod-to-pod MCP calls
+- JWT validation on agent-side MCP endpoints
 - Audit logging table and logging middleware
-- Workspace delegation mode (auto/approval)
+- Workspace delegation mode (auto/approval) with UI for approval queue
 
-### Phase 5: Polish & Observability
+### Phase 5: Observability & Polish
 - Dashboard UI for viewing workspace agents and their capabilities
 - Task history and interaction audit viewer
-- Offline detection and graceful degradation
-- Rate limiting on inter-agent interactions
-- Metrics and alerting
+- Metrics and alerting (task latency, delegation success rate, agent availability)
+- Performance optimization based on production data
