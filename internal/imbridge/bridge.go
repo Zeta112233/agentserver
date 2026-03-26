@@ -193,20 +193,19 @@ func (b *Bridge) pollLoop(ctx context.Context, binding BridgeBinding) {
 		// Forward messages BEFORE advancing cursor.
 		allForwarded := true
 		for _, msg := range result.Messages {
-			// Persist provider-specific metadata
+			// Persist provider-specific metadata with raw user ID.
 			for k, v := range msg.Metadata {
 				if err := b.db.UpsertProviderMeta(sandboxID, providerName, botID, msg.FromUserID, k, v); err != nil {
 					log.Printf("imbridge: failed to save metadata key=%s: %v", k, err)
 				}
 			}
 
-			chatJID := msg.FromUserID + binding.Provider.JIDSuffix()
-
-			fwdMsg := msg
-			fwdMsg.FromUserID = chatJID // replace with suffixed JID
-			if err := b.forwardToNanoClaw(ctx, binding, fwdMsg); err != nil {
+			// Forward with the JID as-is from the provider. Do NOT append
+			// JIDSuffix here — some providers (e.g. iLink/WeChat) already
+			// include a domain suffix in their user IDs.
+			if err := b.forwardToNanoClaw(ctx, binding, msg); err != nil {
 				log.Printf("imbridge: forward failed sandbox=%s from=%s: %v (will retry next poll)",
-					sandboxID, chatJID, err)
+					sandboxID, msg.FromUserID, err)
 				allForwarded = false
 				break
 			}
