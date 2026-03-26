@@ -572,7 +572,10 @@ func (s *Server) attachIMBindings(resp *sandboxResponse) {
 			BoundAt:  b.BoundAt.Format(time.RFC3339),
 		}
 		resp.IMBindings = append(resp.IMBindings, entry)
-		resp.WeixinBindings = append(resp.WeixinBindings, entry)
+		// Backwards compat: only weixin bindings go into weixin_bindings.
+		if b.Provider == "weixin" {
+			resp.WeixinBindings = append(resp.WeixinBindings, entry)
+		}
 	}
 }
 
@@ -1717,7 +1720,6 @@ func (s *Server) restoreIMBridgePollers() {
 				Provider:     provider,
 				Credentials:  imbridge.Credentials{SandboxID: b.SandboxID, BotID: b.BotID, BotToken: b.BotToken, BaseURL: b.BaseURL},
 				Cursor:       b.Cursor,
-				PodIP:        sbx.PodIP,
 				BridgeSecret: sbx.NanoclawBridgeSecret,
 			})
 			restored++
@@ -1752,7 +1754,6 @@ func (s *Server) restoreIMBridgePollersForSandbox(sandboxID string) {
 			Provider:     provider,
 			Credentials:  imbridge.Credentials{SandboxID: b.SandboxID, BotID: b.BotID, BotToken: b.BotToken, BaseURL: b.BaseURL},
 			Cursor:       b.Cursor,
-			PodIP:        sbx.PodIP,
 			BridgeSecret: sbx.NanoclawBridgeSecret,
 		})
 	}
@@ -2000,7 +2001,6 @@ func (s *Server) saveWeixinCredentials(ctx context.Context, sandboxID string, re
 				Provider:     &imbridge.WeixinProvider{},
 				Credentials:  imbridge.Credentials{SandboxID: sandboxID, BotID: accountID, BotToken: result.Token, BaseURL: baseURL},
 				Cursor:       "",
-				PodIP:        sbx.PodIP,
 				BridgeSecret: sbx.NanoclawBridgeSecret,
 			})
 		}
@@ -2224,7 +2224,6 @@ func (s *Server) handleIMTelegramConfigure(w http.ResponseWriter, r *http.Reques
 			Provider:     &imbridge.TelegramProvider{},
 			Credentials:  imbridge.Credentials{SandboxID: id, BotID: botID, BotToken: req.BotToken, BaseURL: imbridge.TelegramDefaultBaseURL},
 			Cursor:       "",
-			PodIP:        sbx.PodIP,
 			BridgeSecret: sbx.NanoclawBridgeSecret,
 		})
 	}

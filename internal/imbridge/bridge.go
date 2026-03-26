@@ -37,11 +37,12 @@ type ExecCommander interface {
 }
 
 // BridgeBinding holds the info needed to run a poller for one IM binding.
+// PodIP is not included here — the bridge dynamically resolves it via
+// SandboxResolver.GetPodIP() to handle pod restarts.
 type BridgeBinding struct {
 	Provider     Provider
 	Credentials  Credentials
 	Cursor       string
-	PodIP        string
 	BridgeSecret string
 }
 

@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS sandbox_im_bindings (
     bound_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE UNIQUE INDEX idx_im_bindings_unique ON sandbox_im_bindings(sandbox_id, provider, bot_id);
 CREATE INDEX idx_im_bindings_sandbox ON sandbox_im_bindings(sandbox_id);
 CREATE INDEX idx_im_bindings_provider_bot ON sandbox_im_bindings(provider, bot_id);
 

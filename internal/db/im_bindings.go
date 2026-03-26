@@ -15,10 +15,14 @@ type IMBinding struct {
 	BoundAt   time.Time
 }
 
-// CreateIMBinding inserts a new IM binding record.
+// CreateIMBinding inserts or updates an IM binding record.
+// On conflict (same sandbox+provider+bot), updates user_id and bound_at.
 func (db *DB) CreateIMBinding(sandboxID, provider, botID, userID string) error {
 	_, err := db.Exec(
-		`INSERT INTO sandbox_im_bindings (sandbox_id, provider, bot_id, user_id) VALUES ($1, $2, $3, $4)`,
+		`INSERT INTO sandbox_im_bindings (sandbox_id, provider, bot_id, user_id)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (sandbox_id, provider, bot_id)
+		DO UPDATE SET user_id = EXCLUDED.user_id, bound_at = NOW()`,
 		sandboxID, provider, botID, userID,
 	)
 	return err

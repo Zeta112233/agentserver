@@ -2,6 +2,7 @@ package imbridge
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/agentserver/agentserver/internal/weixin"
@@ -24,7 +25,7 @@ func (p *WeixinProvider) Poll(ctx context.Context, creds *Credentials, cursor st
 		if resp.ErrCode == weixin.SessionExpiredErrCode || resp.Ret == weixin.SessionExpiredErrCode {
 			return &PollResult{ShouldBackoff: 5 * time.Minute}, nil
 		}
-		return &PollResult{ShouldBackoff: bridgeRetryDelay}, nil
+		return nil, fmt.Errorf("ilink API error: ret=%d errcode=%d errmsg=%s", resp.Ret, resp.ErrCode, resp.ErrMsg)
 	}
 
 	var msgs []InboundMessage
