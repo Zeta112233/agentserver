@@ -126,6 +126,36 @@ func (db *DB) GetBindingsWithBotToken() ([]*WeixinBinding, error) {
 	return bindings, rows.Err()
 }
 
+// GetBindingsWithBotTokenForSandbox returns bindings with saved credentials
+// for a specific sandbox, regardless of sandbox type. Used to restore WeChat
+// credentials for openclaw sandboxes after resume.
+func (db *DB) GetBindingsWithBotTokenForSandbox(sandboxID string) ([]*WeixinBinding, error) {
+	rows, err := db.Query(
+		`SELECT id, sandbox_id, bot_id, user_id, bound_at,
+		        COALESCE(bot_token, ''), COALESCE(ilink_base_url, '')
+		 FROM sandbox_weixin_bindings
+		 WHERE sandbox_id = $1
+		   AND bot_token IS NOT NULL AND bot_token != ''
+		 ORDER BY bound_at DESC`,
+		sandboxID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("get bindings with bot token for sandbox: %w", err)
+	}
+	defer rows.Close()
+
+	var bindings []*WeixinBinding
+	for rows.Next() {
+		b := &WeixinBinding{}
+		if err := rows.Scan(&b.ID, &b.SandboxID, &b.BotID, &b.UserID, &b.BoundAt,
+			&b.BotToken, &b.ILinkBaseURL); err != nil {
+			return nil, fmt.Errorf("scan binding: %w", err)
+		}
+		bindings = append(bindings, b)
+	}
+	return bindings, rows.Err()
+}
+
 // UpdateGetUpdatesBuf persists the long-poll cursor for a binding.
 func (db *DB) UpdateGetUpdatesBuf(sandboxID, botID, buf string) error {
 	_, err := db.Exec(

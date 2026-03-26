@@ -359,6 +359,9 @@ func (m *Manager) StartContainerWithIP(id string, opts process.StartOptions) (st
 ` + openclawCfg + `
 CFGEOF
 exec node openclaw.mjs gateway --allow-unconfigured --bind lan`}
+		// Ensure ~ resolves to the PVC mount so credentials and conversation
+		// data persist across pause/resume.
+		containerEnv = append(containerEnv, corev1.EnvVar{Name: "HOME", Value: "/home/agent"})
 		if opts.OpenclawToken != "" {
 			containerEnv = append(containerEnv, corev1.EnvVar{Name: "OPENCLAW_GATEWAY_TOKEN", Value: opts.OpenclawToken})
 		}
