@@ -8,10 +8,11 @@ RUN apt-get update && apt-get install -y git python3 make g++ && rm -rf /var/lib
 
 # Clone from agentserver fork (includes no-container mode + weixin channel)
 ARG NANOCLAW_VERSION
-RUN git clone --branch ${NANOCLAW_VERSION} --depth 1 \
+RUN npm install -g pnpm && \
+    git clone --branch ${NANOCLAW_VERSION} --depth 1 \
     https://github.com/agentserver/nanoclaw.git . && \
-    npm ci && npm run build && \
-    cd container/agent-runner && npm ci && npm run build
+    pnpm install --frozen-lockfile && pnpm run build && \
+    cd container/agent-runner && pnpm install && pnpm run build
 
 FROM node:20-slim
 
