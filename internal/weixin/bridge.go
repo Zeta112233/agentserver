@@ -31,6 +31,11 @@ type SandboxResolver interface {
 	GetPodIP(sandboxID string) string
 }
 
+// ExecCommander can execute a command inside a sandbox pod.
+type ExecCommander interface {
+	ExecSimple(ctx context.Context, sandboxID string, command []string) (string, error)
+}
+
 // BridgeBinding holds the info needed to run a poller for one WeChat binding.
 type BridgeBinding struct {
 	SandboxID     string
@@ -46,16 +51,22 @@ type BridgeBinding struct {
 type Bridge struct {
 	db       BridgeDB
 	resolver SandboxResolver
+	exec     ExecCommander
 	pollers  map[string]context.CancelFunc // key: sandboxID:botID
-	mu       sync.Mutex
+	// registeredGroups tracks which chat JIDs have been registered as groups
+	// in their sandbox, to avoid redundant ExecSimple calls.
+	registeredGroups map[string]bool // key: sandboxID:chatJID
+	mu               sync.Mutex
 }
 
 // NewBridge creates a new Bridge instance.
-func NewBridge(db BridgeDB, resolver SandboxResolver) *Bridge {
+func NewBridge(db BridgeDB, resolver SandboxResolver, exec ExecCommander) *Bridge {
 	return &Bridge{
-		db:       db,
-		resolver: resolver,
-		pollers:  make(map[string]context.CancelFunc),
+		db:               db,
+		resolver:         resolver,
+		exec:             exec,
+		pollers:          make(map[string]context.CancelFunc),
+		registeredGroups: make(map[string]bool),
 	}
 }
 
@@ -218,6 +229,64 @@ func extractText(msg WeixinMessage) string {
 	return ""
 }
 
+// ensureGroupRegistered registers a chat JID as a NanoClaw group via the IPC mechanism.
+// It writes a register_group JSON file to the main group's IPC tasks directory.
+// NanoClaw's IPC watcher picks it up and calls registerGroup internally.
+// This is a no-op if the group was already registered in this Bridge session.
+func (b *Bridge) ensureGroupRegistered(ctx context.Context, sandboxID, chatJID string) {
+	key := sandboxID + ":" + chatJID
+	b.mu.Lock()
+	already := b.registeredGroups[key]
+	if !already {
+		b.registeredGroups[key] = true
+	}
+	b.mu.Unlock()
+	if already {
+		return
+	}
+
+	if b.exec == nil {
+		log.Printf("weixin bridge: no exec commander, cannot register group %s in sandbox %s", chatJID, sandboxID)
+		return
+	}
+
+	// Write a register_group IPC command to the main group's tasks directory.
+	// The folder name is derived from the JID (safe filesystem chars only).
+	folderName := sanitizeFolder(chatJID)
+	ipcJSON := fmt.Sprintf(`{"type":"register_group","jid":"%s","name":"%s","folder":"%s","trigger":"Andy","requiresTrigger":false}`,
+		chatJID, chatJID, folderName)
+
+	// Write to data/ipc/main/tasks/register-{folder}.json
+	script := fmt.Sprintf(
+		`mkdir -p /app/data/ipc/main/tasks && echo '%s' > /app/data/ipc/main/tasks/register-%s.json`,
+		ipcJSON, folderName)
+
+	_, err := b.exec.ExecSimple(ctx, sandboxID, []string{"sh", "-c", script})
+	if err != nil {
+		log.Printf("weixin bridge: failed to register group %s in sandbox %s: %v", chatJID, sandboxID, err)
+		// Reset so we retry next time
+		b.mu.Lock()
+		delete(b.registeredGroups, key)
+		b.mu.Unlock()
+		return
+	}
+	log.Printf("weixin bridge: registered group %s (folder=%s) in sandbox %s via IPC", chatJID, folderName, sandboxID)
+}
+
+// sanitizeFolder converts a JID to a filesystem-safe folder name.
+func sanitizeFolder(jid string) string {
+	var out []byte
+	for _, c := range []byte(jid) {
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '-', c == '_':
+			out = append(out, c)
+		default:
+			out = append(out, '-')
+		}
+	}
+	return string(out)
+}
+
 // ensureChatRegistered sends a /metadata request to register the chat JID in NanoClaw's
 // chats table before sending messages. NanoClaw's messages table has a FOREIGN KEY on
 // chat_jid → chats(jid), so the chat must exist first.
@@ -260,6 +329,10 @@ func (b *Bridge) forwardToNanoClaw(ctx context.Context, binding BridgeBinding, f
 	if podIP == "" {
 		return fmt.Errorf("sandbox %s has no PodIP (pod may be down or paused)", binding.SandboxID)
 	}
+
+	// Ensure this chat JID is registered as a NanoClaw group (via IPC)
+	// so the message loop will process its messages.
+	b.ensureGroupRegistered(ctx, binding.SandboxID, fromUserID)
 
 	// Ensure the chat is registered in NanoClaw's DB before sending messages.
 	// NanoClaw's messages table has a FOREIGN KEY on chat_jid → chats(jid).

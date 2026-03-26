@@ -95,7 +95,12 @@ func New(a *auth.Auth, oidcMgr *auth.OIDCManager, database *db.DB, sandboxStore 
 		OpenclawSubdomainPrefix: openclawPrefix,
 		PasswordAuthEnabled:     passwordAuthEnabled,
 	}
-	s.WeixinBridge = weixin.NewBridge(database, sandboxStore)
+	// Pass ExecCommander if the process manager supports it (K8s backend does).
+	var execCmd weixin.ExecCommander
+	if ec, ok := processManager.(weixin.ExecCommander); ok {
+		execCmd = ec
+	}
+	s.WeixinBridge = weixin.NewBridge(database, sandboxStore, execCmd)
 	s.restoreWeixinBridgePollers()
 	if s.OIDC != nil {
 		s.OIDC.OnUserCreated = s.createDefaultWorkspace
