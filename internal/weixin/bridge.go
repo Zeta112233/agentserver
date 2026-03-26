@@ -153,7 +153,7 @@ func (b *Bridge) pollLoop(ctx context.Context, binding BridgeBinding) {
 		// Check for API-level errors
 		isError := (resp.Ret != 0) || (resp.ErrCode != 0)
 		if isError {
-			if resp.ErrCode == sessionExpiredErrCode || resp.Ret == sessionExpiredErrCode {
+			if resp.ErrCode == SessionExpiredErrCode || resp.Ret == SessionExpiredErrCode {
 				log.Printf("weixin bridge: session expired sandbox=%s bot=%s, pausing 5min",
 					binding.SandboxID, binding.BotID)
 				sleepCtx(ctx, 5*time.Minute)
@@ -190,7 +190,7 @@ func (b *Bridge) pollLoop(ctx context.Context, binding BridgeBinding) {
 				}
 			}
 
-			text := extractText(msg)
+			text := ExtractText(msg)
 			if text == "" {
 				continue
 			}
