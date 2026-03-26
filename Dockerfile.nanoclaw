@@ -11,7 +11,7 @@ ARG NANOCLAW_VERSION
 RUN npm install -g pnpm && \
     git clone --branch ${NANOCLAW_VERSION} --depth 1 \
     https://github.com/agentserver/nanoclaw.git . && \
-    pnpm install --frozen-lockfile && pnpm run build && \
+    pnpm install --frozen-lockfile && pnpm rebuild better-sqlite3 && pnpm run build && \
     cd container/agent-runner && pnpm install && pnpm run build
 
 FROM node:22-slim
