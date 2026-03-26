@@ -1,27 +1,24 @@
 ARG NANOCLAW_VERSION=agentserver-k8s-mode
-# Cache bust: 2026-03-26-v2
 FROM node:20-slim AS builder
 
 WORKDIR /app
 
-# Install build dependencies
+# Install build dependencies (python3 + make + g++ needed for better-sqlite3 native addon)
 RUN apt-get update && apt-get install -y git python3 make g++ && rm -rf /var/lib/apt/lists/*
 
 # Clone from agentserver fork (includes no-container mode + weixin channel)
 ARG NANOCLAW_VERSION
-ENV PNPM_ALLOW_BUILD=better-sqlite3,esbuild
-RUN npm install -g pnpm && \
-    git clone --branch ${NANOCLAW_VERSION} --depth 1 \
+RUN git clone --branch ${NANOCLAW_VERSION} --depth 1 \
     https://github.com/agentserver/nanoclaw.git . && \
-    pnpm install --frozen-lockfile && pnpm run build && \
-    cd container/agent-runner && pnpm install && pnpm run build
+    npm ci && npm run build && \
+    cd container/agent-runner && npm install && npm run build
 
 FROM node:20-slim
 
 WORKDIR /app
 
 # Install Claude Code CLI
-RUN npm install -g pnpm @anthropic-ai/claude-code
+RUN npm install -g @anthropic-ai/claude-code
 
 # Copy built NanoClaw
 COPY --from=builder /app /app
