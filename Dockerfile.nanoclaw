@@ -10,7 +10,8 @@ RUN apt-get update && apt-get install -y git python3 make g++ && rm -rf /var/lib
 ARG NANOCLAW_VERSION
 RUN git clone --branch ${NANOCLAW_VERSION} --depth 1 \
     https://github.com/agentserver/nanoclaw.git . && \
-    npm ci && npm run build
+    npm ci && npm run build && \
+    cd container/agent-runner && npm ci && npm run build
 
 FROM node:20-slim
 
