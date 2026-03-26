@@ -81,6 +81,11 @@ func (b *Bridge) Providers() []Provider {
 	return out
 }
 
+// GetProvider returns the provider with the given name, or nil if not found.
+func (b *Bridge) GetProvider(name string) Provider {
+	return b.providers[name]
+}
+
 func pollerKey(sandboxID, provider, botID string) string {
 	return sandboxID + ":" + provider + ":" + botID
 }

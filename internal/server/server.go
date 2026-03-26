@@ -1738,24 +1738,23 @@ func (s *Server) restoreIMBridgePollersForSandbox(sandboxID string) {
 	if !ok || sbx.PodIP == "" {
 		return
 	}
-	for _, provider := range s.IMBridge.Providers() {
-		bindings, err := s.DB.GetActiveBindings(provider.Name())
-		if err != nil {
-			log.Printf("imbridge restore for %s: failed to query %s bindings: %v", sandboxID, provider.Name(), err)
+	bindings, err := s.DB.GetActiveBindingsForSandbox(sandboxID)
+	if err != nil {
+		log.Printf("imbridge restore for %s: failed to query bindings: %v", sandboxID, err)
+		return
+	}
+	for _, b := range bindings {
+		provider := s.IMBridge.GetProvider(b.Provider)
+		if provider == nil {
 			continue
 		}
-		for _, b := range bindings {
-			if b.SandboxID != sandboxID {
-				continue
-			}
-			s.IMBridge.StartPoller(imbridge.BridgeBinding{
-				Provider:     provider,
-				Credentials:  imbridge.Credentials{SandboxID: b.SandboxID, BotID: b.BotID, BotToken: b.BotToken, BaseURL: b.BaseURL},
-				Cursor:       b.Cursor,
-				PodIP:        sbx.PodIP,
-				BridgeSecret: sbx.NanoclawBridgeSecret,
-			})
-		}
+		s.IMBridge.StartPoller(imbridge.BridgeBinding{
+			Provider:     provider,
+			Credentials:  imbridge.Credentials{SandboxID: b.SandboxID, BotID: b.BotID, BotToken: b.BotToken, BaseURL: b.BaseURL},
+			Cursor:       b.Cursor,
+			PodIP:        sbx.PodIP,
+			BridgeSecret: sbx.NanoclawBridgeSecret,
+		})
 	}
 }
 
@@ -1768,10 +1767,17 @@ func (s *Server) restoreOpenclawWeixinCredentials(sandboxID string) {
 		return
 	}
 
-	bindings, err := s.DB.GetActiveBindingsForSandbox(sandboxID)
+	allBindings, err := s.DB.GetActiveBindingsForSandbox(sandboxID)
 	if err != nil {
 		log.Printf("openclaw weixin restore for %s: failed to query bindings: %v", sandboxID, err)
 		return
+	}
+	// Filter to weixin bindings only — openclaw only supports weixin.
+	var bindings []*db.IMBinding
+	for _, b := range allBindings {
+		if b.Provider == "weixin" {
+			bindings = append(bindings, b)
+		}
 	}
 	if len(bindings) == 0 {
 		return
@@ -2281,15 +2287,9 @@ func (s *Server) handleListIMBindings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	type bindingResponse struct {
-		Provider string `json:"provider"`
-		BotID    string `json:"bot_id"`
-		UserID   string `json:"user_id,omitempty"`
-		BoundAt  string `json:"bound_at"`
-	}
-	resp := make([]bindingResponse, 0, len(bindings))
+	resp := make([]imBindingResponse, 0, len(bindings))
 	for _, b := range bindings {
-		resp = append(resp, bindingResponse{
+		resp = append(resp, imBindingResponse{
 			Provider: b.Provider,
 			BotID:    b.BotID,
 			UserID:   b.UserID,

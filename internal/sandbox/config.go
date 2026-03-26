@@ -228,7 +228,7 @@ func BuildOpenclawConfig(proxyBaseURL, proxyToken, gatewayToken string, weixinEn
 // BuildNanoclawConfig returns the environment variable content for a nanoclaw
 // container. When byokBaseURL and byokAPIKey are non-empty (BYOK mode), they
 // override the default proxy credentials.
-func BuildNanoclawConfig(proxyBaseURL, proxyToken, assistantName string, weixinBridgeURL, bridgeSecret string, byokBaseURL, byokAPIKey string) string {
+func BuildNanoclawConfig(proxyBaseURL, proxyToken, assistantName string, imBridgeURL, bridgeSecret string, byokBaseURL, byokAPIKey string) string {
 	baseURL := proxyBaseURL
 	apiKey := proxyToken
 	if byokBaseURL != "" {
@@ -243,10 +243,10 @@ func BuildNanoclawConfig(proxyBaseURL, proxyToken, assistantName string, weixinB
 	}
 	lines = append(lines, "ASSISTANT_NAME="+assistantName)
 	lines = append(lines, "NANOCLAW_NO_CONTAINER=true")
-	if weixinBridgeURL != "" {
-		lines = append(lines, "NANOCLAW_BRIDGE_URL="+weixinBridgeURL)
+	if imBridgeURL != "" {
+		lines = append(lines, "NANOCLAW_BRIDGE_URL="+imBridgeURL)
 		// Backwards compat (remove after all pods updated)
-		lines = append(lines, "NANOCLAW_WEIXIN_BRIDGE_URL="+weixinBridgeURL)
+		lines = append(lines, "NANOCLAW_WEIXIN_BRIDGE_URL="+imBridgeURL)
 	}
 	if bridgeSecret != "" {
 		lines = append(lines, "NANOCLAW_BRIDGE_SECRET="+bridgeSecret)
