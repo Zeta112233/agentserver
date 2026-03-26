@@ -121,6 +121,7 @@ func (b *Bridge) pollLoop(ctx context.Context, binding BridgeBinding) {
 		default:
 		}
 
+		log.Printf("weixin bridge: polling sandbox=%s bot=%s buf_len=%d", binding.SandboxID, binding.BotID, len(getUpdatesBuf))
 		resp, err := GetUpdates(ctx, binding.ILinkBaseURL, binding.BotToken, getUpdatesBuf)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -160,6 +161,7 @@ func (b *Bridge) pollLoop(ctx context.Context, binding BridgeBinding) {
 		}
 
 		consecutiveFailures = 0
+		log.Printf("weixin bridge: poll result sandbox=%s ret=%d msgs=%d buf_len=%d", binding.SandboxID, resp.Ret, len(resp.Msgs), len(resp.GetUpdatesBuf))
 
 		// Forward messages BEFORE advancing cursor.
 		// If any forward fails, we do NOT advance the cursor so the next

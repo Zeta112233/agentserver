@@ -3,6 +3,8 @@ package weixin
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -196,6 +198,12 @@ func buildILinkHeaders(botToken string) http.Header {
 	h := http.Header{}
 	h.Set("Content-Type", "application/json")
 	h.Set("AuthorizationType", "ilink_bot_token")
+	// X-WECHAT-UIN: random uint32 as decimal string, base64-encoded.
+	// Required by iLink API (matches openclaw-weixin's randomWechatUin).
+	uin := make([]byte, 4)
+	rand.Read(uin)
+	uint32Val := uint32(uin[0])<<24 | uint32(uin[1])<<16 | uint32(uin[2])<<8 | uint32(uin[3])
+	h.Set("X-WECHAT-UIN", base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("%d", uint32Val))))
 	if botToken != "" {
 		h.Set("Authorization", "Bearer "+botToken)
 	}
