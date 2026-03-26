@@ -34,7 +34,7 @@ import {
   type TraceItem,
   type TokenUsageItem,
   type TraceDetailResponse,
-  IMBinding,
+  type IMBinding,
   listIMBindings,
 } from '../lib/api'
 import { ConfirmModal } from './Modals'
