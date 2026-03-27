@@ -2115,9 +2115,10 @@ func (s *Server) handleNanoclawIMSend(w http.ResponseWriter, r *http.Request) {
 
 	// Parse request — supports JSON (text) and multipart/form-data (media).
 	var reqMeta struct {
-		BotID    string `json:"bot_id"`
-		ToUserID string `json:"to_user_id"`
-		Text     string `json:"text"`
+		BotID      string `json:"bot_id"`
+		ToUserID   string `json:"to_user_id"`
+		Text       string `json:"text"`
+		ProviderID string `json:"provider"` // "weixin", "telegram" — identifies which IM to reply via
 	}
 	var mediaData []byte
 
@@ -2160,7 +2161,14 @@ func (s *Server) handleNanoclawIMSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	provider := s.IMBridge.FindProviderByJID(reqMeta.ToUserID)
+	// Resolve provider: prefer explicit "provider" field, fall back to JID matching, default to weixin.
+	var provider imbridge.Provider
+	if reqMeta.ProviderID != "" {
+		provider = s.IMBridge.GetProvider(reqMeta.ProviderID)
+	}
+	if provider == nil {
+		provider = s.IMBridge.FindProviderByJID(reqMeta.ToUserID)
+	}
 	if provider == nil {
 		provider = &imbridge.WeixinProvider{}
 	}

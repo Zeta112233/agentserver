@@ -282,7 +282,7 @@ func (b *Bridge) forwardToNanoClaw(ctx context.Context, binding BridgeBinding, m
 
 	b.ensureGroupRegistered(ctx, sandboxID, msg.FromUserID)
 
-	if err := b.ensureChatRegistered(ctx, podIP, binding.BridgeSecret, msg.FromUserID, msg.SenderName, msg.IsGroup); err != nil {
+	if err := b.ensureChatRegistered(ctx, podIP, binding.BridgeSecret, msg.FromUserID, msg.SenderName, binding.Provider.Name(), msg.IsGroup); err != nil {
 		log.Printf("imbridge: failed to register chat %s: %v (continuing anyway)", msg.FromUserID, err)
 	}
 
@@ -293,6 +293,7 @@ func (b *Bridge) forwardToNanoClaw(ctx context.Context, binding BridgeBinding, m
 		"sender_name": msg.SenderName,
 		"content":     msg.Text,
 		"timestamp":   time.Now().UTC().Format(time.RFC3339),
+		"provider":    binding.Provider.Name(),
 	}
 
 	body, err := json.Marshal(payload)
@@ -324,12 +325,13 @@ func (b *Bridge) forwardToNanoClaw(ctx context.Context, binding BridgeBinding, m
 }
 
 // ensureChatRegistered sends a /metadata request to register the chat JID.
-func (b *Bridge) ensureChatRegistered(ctx context.Context, podIP, bridgeSecret, chatJID, chatName string, isGroup bool) error {
+func (b *Bridge) ensureChatRegistered(ctx context.Context, podIP, bridgeSecret, chatJID, chatName, provider string, isGroup bool) error {
 	meta := map[string]interface{}{
 		"chat_jid":  chatJID,
 		"timestamp": time.Now().UTC().Format(time.RFC3339),
 		"name":      chatName,
 		"is_group":  isGroup,
+		"provider":  provider,
 	}
 	body, err := json.Marshal(meta)
 	if err != nil {
