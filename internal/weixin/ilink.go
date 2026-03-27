@@ -22,7 +22,12 @@ const (
 	channelVersion       = "agentserver-bridge-1.0"
 	longPollTimeout      = 40 * time.Second // slightly longer than server's 35s
 	sendMessageTimeout   = 15 * time.Second
+	configTimeout        = 10 * time.Second
 	SessionExpiredErrCode = -14
+
+	// TypingStatus values for SendTyping.
+	TypingStatusTyping = 1
+	TypingStatusCancel = 2
 )
 
 // Session holds the state of an in-progress QR login for a single sandbox.
@@ -325,6 +330,100 @@ func ExtractText(msg WeixinMessage) string {
 		}
 	}
 	return ""
+}
+
+// GetConfigResponse is the response from ilink/bot/getconfig.
+type GetConfigResponse struct {
+	Ret          int    `json:"ret"`
+	ErrMsg       string `json:"errmsg"`
+	TypingTicket string `json:"typing_ticket"`
+}
+
+// GetConfig fetches bot config for a user, including the typing_ticket needed for SendTyping.
+func GetConfig(ctx context.Context, apiBaseURL, botToken, userID, contextToken string) (*GetConfigResponse, error) {
+	if apiBaseURL == "" {
+		apiBaseURL = DefaultAPIBaseURL
+	}
+	u, err := url.Parse(apiBaseURL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid apiBaseURL: %w", err)
+	}
+	u.Path = "/ilink/bot/getconfig"
+
+	body := map[string]interface{}{
+		"ilink_user_id": userID,
+		"context_token": contextToken,
+		"base_info":     BaseInfo{ChannelVersion: channelVersion},
+	}
+	bodyBytes, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("marshal getconfig request: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, configTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "POST", u.String(), bytes.NewReader(bodyBytes))
+	if err != nil {
+		return nil, err
+	}
+	for k, v := range buildILinkHeaders(botToken) {
+		req.Header[k] = v
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("ilink getconfig: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var result GetConfigResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("ilink getconfig: decode: %w", err)
+	}
+	return &result, nil
+}
+
+// SendTyping sends a typing indicator to a WeChat user via iLink.
+// status should be TypingStatusTyping (1) or TypingStatusCancel (2).
+func SendTyping(ctx context.Context, apiBaseURL, botToken, userID, typingTicket string, status int) error {
+	if apiBaseURL == "" {
+		apiBaseURL = DefaultAPIBaseURL
+	}
+	u, err := url.Parse(apiBaseURL)
+	if err != nil {
+		return fmt.Errorf("invalid apiBaseURL: %w", err)
+	}
+	u.Path = "/ilink/bot/sendtyping"
+
+	body := map[string]interface{}{
+		"ilink_user_id": userID,
+		"typing_ticket": typingTicket,
+		"status":        status,
+		"base_info":     BaseInfo{ChannelVersion: channelVersion},
+	}
+	bodyBytes, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("marshal sendtyping request: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, configTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "POST", u.String(), bytes.NewReader(bodyBytes))
+	if err != nil {
+		return err
+	}
+	for k, v := range buildILinkHeaders(botToken) {
+		req.Header[k] = v
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("ilink sendtyping: %w", err)
+	}
+	defer resp.Body.Close()
+	return nil
 }
 
 // PollLoginStatus long-polls the ilink API for QR code scan status.

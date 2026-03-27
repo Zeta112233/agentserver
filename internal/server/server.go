@@ -2154,6 +2154,11 @@ func (s *Server) handleNanoclawIMSend(w http.ResponseWriter, r *http.Request) {
 		BotToken:  botToken,
 		BaseURL:   baseURL,
 	}
+	// Stop typing indicator before sending the reply.
+	if s.IMBridge != nil {
+		s.IMBridge.StopTyping(sandboxID, rawUserID)
+	}
+
 	if err := provider.Send(r.Context(), creds, rawUserID, req.Text, meta); err != nil {
 		log.Printf("nanoclaw im send: failed sandbox=%s provider=%s to=%s: %v", sandboxID, provider.Name(), rawUserID, err)
 		http.Error(w, "failed to send message", http.StatusBadGateway)

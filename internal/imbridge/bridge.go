@@ -54,6 +54,7 @@ type Bridge struct {
 	providers        map[string]Provider
 	pollers          map[string]context.CancelFunc // key: "sandboxID:provider:botID"
 	registeredGroups map[string]bool               // key: "sandboxID:chatJID"
+	typingSessions   map[string]func()             // key: "sandboxID:userID" → cancel func
 	mu               sync.Mutex
 }
 
@@ -70,6 +71,7 @@ func NewBridge(db BridgeDB, resolver SandboxResolver, exec ExecCommander, provid
 		providers:        pm,
 		pollers:          make(map[string]context.CancelFunc),
 		registeredGroups: make(map[string]bool),
+		typingSessions:   make(map[string]func()),
 	}
 }
 
@@ -150,6 +152,54 @@ func StripJIDSuffix(jid string, p Provider) string {
 	return strings.TrimSuffix(jid, p.JIDSuffix())
 }
 
+func typingKey(sandboxID, userID string) string {
+	return sandboxID + ":" + userID
+}
+
+// startTypingForUser starts a typing indicator session if the provider supports it.
+func (b *Bridge) startTypingForUser(binding BridgeBinding, msg InboundMessage) {
+	tp, ok := binding.Provider.(TypingProvider)
+	if !ok {
+		return
+	}
+
+	sandboxID := binding.Credentials.SandboxID
+	key := typingKey(sandboxID, msg.FromUserID)
+
+	// Stop any existing typing session for this user.
+	b.mu.Lock()
+	if existingCancel, exists := b.typingSessions[key]; exists {
+		existingCancel()
+	}
+	b.mu.Unlock()
+
+	sendError := func(text string) {
+		if err := binding.Provider.Send(context.Background(), &binding.Credentials, msg.FromUserID, text, msg.Metadata); err != nil {
+			log.Printf("imbridge: failed to send error notice to %s: %v", msg.FromUserID, err)
+		}
+	}
+
+	cancel := tp.StartTyping(context.Background(), &binding.Credentials, msg.FromUserID, msg.Metadata, sendError)
+
+	b.mu.Lock()
+	b.typingSessions[key] = cancel
+	b.mu.Unlock()
+}
+
+// StopTyping stops the typing indicator for a user in a sandbox.
+func (b *Bridge) StopTyping(sandboxID, userID string) {
+	key := typingKey(sandboxID, userID)
+	b.mu.Lock()
+	cancel, ok := b.typingSessions[key]
+	if ok {
+		delete(b.typingSessions, key)
+	}
+	b.mu.Unlock()
+	if ok {
+		cancel()
+	}
+}
+
 // pollLoop is the long-poll goroutine for a single binding.
 func (b *Bridge) pollLoop(ctx context.Context, binding BridgeBinding) {
 	cursor := binding.Cursor
@@ -209,6 +259,8 @@ func (b *Bridge) pollLoop(ctx context.Context, binding BridgeBinding) {
 				allForwarded = false
 				break
 			}
+			// Start typing indicator while NanoClaw processes the message.
+			b.startTypingForUser(binding, msg)
 		}
 
 		if allForwarded && result.NewCursor != "" {
