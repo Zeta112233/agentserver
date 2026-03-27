@@ -623,7 +623,8 @@ func DownloadFromCDN(ctx context.Context, cdnBaseURL, encryptQueryParam string) 
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("cdn download: status %d", resp.StatusCode)
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("cdn download: status %d body=%s url=%s", resp.StatusCode, string(body), dlURL)
 	}
 	return io.ReadAll(resp.Body)
 }
