@@ -19,6 +19,7 @@ import (
 
 const (
 	DefaultAPIBaseURL    = "https://ilinkai.weixin.qq.com"
+	DefaultCDNBaseURL    = "https://novac2c.cdn.weixin.qq.com/c2c"
 	defaultBotType       = "3"
 	startTimeout         = 10 * time.Second
 	pollTimeout          = 40 * time.Second // slightly longer than ilink's 35s long-poll
@@ -544,7 +545,7 @@ func UploadAndSendImage(ctx context.Context, apiBaseURL, cdnBaseURL, botToken, t
 
 	cdnURL := cdnBaseURL
 	if cdnURL == "" {
-		cdnURL = apiBaseURL
+		cdnURL = DefaultCDNBaseURL
 	}
 	downloadParam, err := UploadToCDN(ctx, cdnURL, uploadResp.UploadParam, filekey, ciphertext)
 	if err != nil {
@@ -582,8 +583,9 @@ func EncryptAESECB(plaintext, key []byte) []byte {
 }
 
 // AESECBPaddedSize returns the size after AES-128-ECB encryption with PKCS7 padding.
+// PKCS7 always adds at least 1 byte, so output = ceil((size+1)/16) * 16.
 func AESECBPaddedSize(plaintextSize int) int {
-	return ((plaintextSize + 1) / 16 + 1) * 16
+	return (plaintextSize/16 + 1) * 16
 }
 
 // ExtractText extracts the text content from a WeixinMessage.

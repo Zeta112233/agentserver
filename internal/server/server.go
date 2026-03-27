@@ -2134,7 +2134,11 @@ func (s *Server) handleNanoclawIMSend(w http.ResponseWriter, r *http.Request) {
 		}
 		if file, _, err := r.FormFile("media"); err == nil {
 			defer file.Close()
-			mediaData, _ = io.ReadAll(file)
+			mediaData, err = io.ReadAll(file)
+			if err != nil {
+				http.Error(w, "failed to read media file", http.StatusBadRequest)
+				return
+			}
 		}
 	} else {
 		// JSON body (text-only, backwards compatible)
