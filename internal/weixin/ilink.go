@@ -3,10 +3,14 @@ package weixin
 import (
 	"bytes"
 	"context"
+	"crypto/aes"
+	"crypto/md5"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"sync"
@@ -55,13 +59,27 @@ type BaseInfo struct {
 
 // MessageItem represents a single content item in a WeixinMessage.
 type MessageItem struct {
-	Type     int       `json:"type,omitempty"` // 1=TEXT, 2=IMAGE, 3=VOICE, 4=FILE, 5=VIDEO
-	TextItem *TextItem `json:"text_item,omitempty"`
+	Type      int        `json:"type,omitempty"` // 1=TEXT, 2=IMAGE, 3=VOICE, 4=FILE, 5=VIDEO
+	TextItem  *TextItem  `json:"text_item,omitempty"`
+	ImageItem *ImageItem `json:"image_item,omitempty"`
 }
 
 // TextItem holds the text content of a TEXT message item.
 type TextItem struct {
 	Text string `json:"text,omitempty"`
+}
+
+// ImageItem holds the image data for an IMAGE message item.
+type ImageItem struct {
+	Media   *CDNMedia `json:"media,omitempty"`
+	MidSize int       `json:"mid_size,omitempty"` // ciphertext size
+}
+
+// CDNMedia references a file uploaded to iLink CDN.
+type CDNMedia struct {
+	EncryptQueryParam string `json:"encrypt_query_param,omitempty"`
+	AESKey            string `json:"aes_key,omitempty"`    // base64-encoded
+	EncryptType       int    `json:"encrypt_type,omitempty"` // 1 = full packet encryption
 }
 
 // WeixinMessage is a message from/to iLink.
@@ -329,6 +347,243 @@ func SendTextMessage(ctx context.Context, apiBaseURL, botToken, toUserID, text, 
 		return fmt.Errorf("ilink sendmessage: ret=%d errmsg=%s", result.Ret, result.ErrMsg)
 	}
 	return nil
+}
+
+// --- iLink CDN Media Upload ---
+
+// GetUploadURLResponse is the response from ilink/bot/getuploadurl.
+type GetUploadURLResponse struct {
+	UploadParam string `json:"upload_param"`
+}
+
+// GetUploadURL obtains a pre-signed CDN upload URL from iLink.
+func GetUploadURL(ctx context.Context, apiBaseURL, botToken string, params map[string]interface{}) (*GetUploadURLResponse, error) {
+	if apiBaseURL == "" {
+		apiBaseURL = DefaultAPIBaseURL
+	}
+	u, err := url.Parse(apiBaseURL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid apiBaseURL: %w", err)
+	}
+	u.Path = "/ilink/bot/getuploadurl"
+
+	params["base_info"] = BaseInfo{ChannelVersion: channelVersion}
+	bodyBytes, err := json.Marshal(params)
+	if err != nil {
+		return nil, fmt.Errorf("marshal getuploadurl: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, sendMessageTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "POST", u.String(), bytes.NewReader(bodyBytes))
+	if err != nil {
+		return nil, err
+	}
+	for k, v := range buildILinkHeaders(botToken) {
+		req.Header[k] = v
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("ilink getuploadurl: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var result GetUploadURLResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("ilink getuploadurl: decode: %w", err)
+	}
+	if result.UploadParam == "" {
+		return nil, fmt.Errorf("ilink getuploadurl: empty upload_param")
+	}
+	return &result, nil
+}
+
+// UploadToCDN uploads encrypted file data to the iLink CDN.
+// Returns the download encrypt_query_param from the response header.
+func UploadToCDN(ctx context.Context, cdnBaseURL, uploadParam, filekey string, ciphertext []byte) (string, error) {
+	cdnURL := fmt.Sprintf("%s/upload?encrypted_query_param=%s&filekey=%s",
+		cdnBaseURL, url.QueryEscape(uploadParam), url.QueryEscape(filekey))
+
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "POST", cdnURL, bytes.NewReader(ciphertext))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/octet-stream")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("cdn upload: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("cdn upload: status %d: %s", resp.StatusCode, string(body))
+	}
+
+	downloadParam := resp.Header.Get("x-encrypted-param")
+	if downloadParam == "" {
+		return "", fmt.Errorf("cdn upload: missing x-encrypted-param header")
+	}
+	return downloadParam, nil
+}
+
+// SendImageMessage sends an image message to a WeChat user via iLink.
+func SendImageMessage(ctx context.Context, apiBaseURL, botToken, toUserID string, encryptQueryParam, aesKeyHex string, ciphertextSize int, contextToken string) error {
+	if apiBaseURL == "" {
+		apiBaseURL = DefaultAPIBaseURL
+	}
+	u, err := url.Parse(apiBaseURL)
+	if err != nil {
+		return fmt.Errorf("invalid apiBaseURL: %w", err)
+	}
+	u.Path = "/ilink/bot/sendmessage"
+
+	// aes_key in message payload is base64-encoded (not hex)
+	aesKeyBytes, err := hex.DecodeString(aesKeyHex)
+	if err != nil {
+		return fmt.Errorf("invalid aes key hex: %w", err)
+	}
+	aesKeyB64 := base64.StdEncoding.EncodeToString(aesKeyBytes)
+
+	clientID := fmt.Sprintf("agentserver-%d", time.Now().UnixMilli())
+	body := SendMessageRequest{
+		Msg: WeixinMessage{
+			ToUserID:     toUserID,
+			ClientID:     clientID,
+			MessageType:  2, // BOT
+			MessageState: 2, // FINISH
+			ContextToken: contextToken,
+			ItemList: []MessageItem{{
+				Type: 2, // IMAGE
+				ImageItem: &ImageItem{
+					Media: &CDNMedia{
+						EncryptQueryParam: encryptQueryParam,
+						AESKey:            aesKeyB64,
+						EncryptType:       1,
+					},
+					MidSize: ciphertextSize,
+				},
+			}},
+		},
+		BaseInfo: BaseInfo{ChannelVersion: channelVersion},
+	}
+	bodyBytes, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("marshal sendImageMessage: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, sendMessageTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "POST", u.String(), bytes.NewReader(bodyBytes))
+	if err != nil {
+		return err
+	}
+	for k, v := range buildILinkHeaders(botToken) {
+		req.Header[k] = v
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("ilink sendImageMessage: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("ilink sendImageMessage: status %d", resp.StatusCode)
+	}
+	var result struct {
+		Ret    int    `json:"ret"`
+		ErrMsg string `json:"errmsg"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err == nil && result.Ret != 0 {
+		return fmt.Errorf("ilink sendImageMessage: ret=%d errmsg=%s", result.Ret, result.ErrMsg)
+	}
+	return nil
+}
+
+// UploadAndSendImage handles the complete flow: encrypt → CDN upload → send message.
+func UploadAndSendImage(ctx context.Context, apiBaseURL, cdnBaseURL, botToken, toUserID string, imageData []byte, contextToken string) error {
+	// Generate random filekey and AES key
+	filekeyBytes := make([]byte, 16)
+	aesKeyBytes := make([]byte, 16)
+	rand.Read(filekeyBytes)
+	rand.Read(aesKeyBytes)
+	filekey := hex.EncodeToString(filekeyBytes)
+	aesKeyHex := hex.EncodeToString(aesKeyBytes)
+
+	// Calculate sizes and MD5
+	rawsize := len(imageData)
+	rawMD5 := md5.Sum(imageData)
+	rawfilemd5 := hex.EncodeToString(rawMD5[:])
+	filesize := AESECBPaddedSize(rawsize)
+
+	// Step 1: Get upload URL
+	uploadResp, err := GetUploadURL(ctx, apiBaseURL, botToken, map[string]interface{}{
+		"filekey":      filekey,
+		"media_type":   1, // IMAGE
+		"to_user_id":   toUserID,
+		"rawsize":      rawsize,
+		"rawfilemd5":   rawfilemd5,
+		"filesize":     filesize,
+		"no_need_thumb": true,
+		"aeskey":       aesKeyHex,
+	})
+	if err != nil {
+		return fmt.Errorf("get upload url: %w", err)
+	}
+
+	// Step 2: Encrypt and upload to CDN
+	ciphertext := EncryptAESECB(imageData, aesKeyBytes)
+
+	cdnURL := cdnBaseURL
+	if cdnURL == "" {
+		cdnURL = apiBaseURL
+	}
+	downloadParam, err := UploadToCDN(ctx, cdnURL, uploadResp.UploadParam, filekey, ciphertext)
+	if err != nil {
+		return fmt.Errorf("cdn upload: %w", err)
+	}
+
+	// Step 3: Send image message
+	return SendImageMessage(ctx, apiBaseURL, botToken, toUserID, downloadParam, aesKeyHex, len(ciphertext), contextToken)
+}
+
+// --- AES-128-ECB encryption ---
+
+// EncryptAESECB encrypts data with AES-128-ECB and PKCS7 padding.
+func EncryptAESECB(plaintext, key []byte) []byte {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		panic(fmt.Sprintf("aes.NewCipher: %v", err))
+	}
+	blockSize := block.BlockSize()
+
+	// PKCS7 padding
+	padding := blockSize - len(plaintext)%blockSize
+	padded := make([]byte, len(plaintext)+padding)
+	copy(padded, plaintext)
+	for i := len(plaintext); i < len(padded); i++ {
+		padded[i] = byte(padding)
+	}
+
+	// ECB mode: encrypt each block independently
+	ciphertext := make([]byte, len(padded))
+	for i := 0; i < len(padded); i += blockSize {
+		block.Encrypt(ciphertext[i:i+blockSize], padded[i:i+blockSize])
+	}
+	return ciphertext
+}
+
+// AESECBPaddedSize returns the size after AES-128-ECB encryption with PKCS7 padding.
+func AESECBPaddedSize(plaintextSize int) int {
+	return ((plaintextSize + 1) / 16 + 1) * 16
 }
 
 // ExtractText extracts the text content from a WeixinMessage.

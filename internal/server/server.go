@@ -2109,30 +2109,56 @@ func (s *Server) handleNanoclawIMSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req struct {
+	// Parse request — supports JSON (text) and multipart/form-data (media).
+	var reqMeta struct {
 		BotID    string `json:"bot_id"`
 		ToUserID string `json:"to_user_id"`
 		Text     string `json:"text"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+	var mediaData []byte
+
+	ct := r.Header.Get("Content-Type")
+	if strings.HasPrefix(ct, "multipart/") {
+		// Multipart: "meta" part (JSON) + optional "media" part (binary)
+		if err := r.ParseMultipartForm(32 << 20); err != nil { // 32MB limit
+			http.Error(w, "invalid multipart body", http.StatusBadRequest)
+			return
+		}
+		metaPart := r.FormValue("meta")
+		if metaPart != "" {
+			if err := json.Unmarshal([]byte(metaPart), &reqMeta); err != nil {
+				http.Error(w, "invalid meta JSON", http.StatusBadRequest)
+				return
+			}
+		}
+		if file, _, err := r.FormFile("media"); err == nil {
+			defer file.Close()
+			mediaData, _ = io.ReadAll(file)
+		}
+	} else {
+		// JSON body (text-only, backwards compatible)
+		if err := json.NewDecoder(r.Body).Decode(&reqMeta); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+	}
+
+	if reqMeta.ToUserID == "" {
+		http.Error(w, "to_user_id is required", http.StatusBadRequest)
 		return
 	}
-	if req.ToUserID == "" || req.Text == "" {
-		http.Error(w, "to_user_id and text are required", http.StatusBadRequest)
+	if reqMeta.Text == "" && len(mediaData) == 0 {
+		http.Error(w, "text or media is required", http.StatusBadRequest)
 		return
 	}
 
-	provider := s.IMBridge.FindProviderByJID(req.ToUserID)
+	provider := s.IMBridge.FindProviderByJID(reqMeta.ToUserID)
 	if provider == nil {
 		provider = &imbridge.WeixinProvider{}
 	}
+	userID := reqMeta.ToUserID
 
-	// Use to_user_id as-is — user IDs flow through the system unchanged
-	// (e.g. WeChat: "xxx@im.wechat", Telegram: "123456").
-	userID := req.ToUserID
-
-	botID := req.BotID
+	botID := reqMeta.BotID
 	if botID == "" {
 		bindings, err := s.DB.ListIMBindings(sandboxID, provider.Name())
 		if err != nil || len(bindings) == 0 {
@@ -2150,21 +2176,37 @@ func (s *Server) handleNanoclawIMSend(w http.ResponseWriter, r *http.Request) {
 
 	meta, _ := s.DB.GetAllProviderMeta(sandboxID, provider.Name(), botID, userID)
 
-	creds := &imbridge.Credentials{
-		SandboxID: sandboxID,
-		BotID:     botID,
-		BotToken:  botToken,
-		BaseURL:   baseURL,
-	}
-	// Stop typing indicator before sending the reply.
+	// Stop typing indicator before sending.
 	if s.IMBridge != nil {
 		s.IMBridge.StopTyping(sandboxID, userID)
 	}
 
-	if err := provider.Send(r.Context(), creds, userID, req.Text, meta); err != nil {
-		log.Printf("nanoclaw im send: failed sandbox=%s provider=%s to=%s: %v", sandboxID, provider.Name(), userID, err)
-		http.Error(w, "failed to send message", http.StatusBadGateway)
-		return
+	// Send media or text.
+	if len(mediaData) > 0 {
+		// Image upload flow: encrypt → CDN → sendmessage
+		contextToken := ""
+		if meta != nil {
+			contextToken = meta["context_token"]
+		}
+		if err := weixin.UploadAndSendImage(r.Context(), baseURL, "", botToken, userID, mediaData, contextToken); err != nil {
+			log.Printf("nanoclaw im send image: failed sandbox=%s to=%s: %v", sandboxID, userID, err)
+			http.Error(w, "failed to send image: "+err.Error(), http.StatusBadGateway)
+			return
+		}
+		// Send caption as separate text message if provided.
+		if reqMeta.Text != "" {
+			if err := provider.Send(r.Context(), &imbridge.Credentials{SandboxID: sandboxID, BotID: botID, BotToken: botToken, BaseURL: baseURL}, userID, reqMeta.Text, meta); err != nil {
+				log.Printf("nanoclaw im send caption: failed sandbox=%s to=%s: %v", sandboxID, userID, err)
+			}
+		}
+	} else {
+		// Text-only message.
+		creds := &imbridge.Credentials{SandboxID: sandboxID, BotID: botID, BotToken: botToken, BaseURL: baseURL}
+		if err := provider.Send(r.Context(), creds, userID, reqMeta.Text, meta); err != nil {
+			log.Printf("nanoclaw im send: failed sandbox=%s provider=%s to=%s: %v", sandboxID, provider.Name(), userID, err)
+			http.Error(w, "failed to send message", http.StatusBadGateway)
+			return
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
