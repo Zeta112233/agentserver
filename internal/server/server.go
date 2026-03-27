@@ -2128,7 +2128,9 @@ func (s *Server) handleNanoclawIMSend(w http.ResponseWriter, r *http.Request) {
 		provider = &imbridge.WeixinProvider{}
 	}
 
-	rawUserID := imbridge.StripJIDSuffix(req.ToUserID, provider)
+	// Use to_user_id as-is — user IDs flow through the system unchanged
+	// (e.g. WeChat: "xxx@im.wechat", Telegram: "123456").
+	userID := req.ToUserID
 
 	botID := req.BotID
 	if botID == "" {
@@ -2146,7 +2148,7 @@ func (s *Server) handleNanoclawIMSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	meta, _ := s.DB.GetAllProviderMeta(sandboxID, provider.Name(), botID, rawUserID)
+	meta, _ := s.DB.GetAllProviderMeta(sandboxID, provider.Name(), botID, userID)
 
 	creds := &imbridge.Credentials{
 		SandboxID: sandboxID,
@@ -2156,11 +2158,11 @@ func (s *Server) handleNanoclawIMSend(w http.ResponseWriter, r *http.Request) {
 	}
 	// Stop typing indicator before sending the reply.
 	if s.IMBridge != nil {
-		s.IMBridge.StopTyping(sandboxID, rawUserID)
+		s.IMBridge.StopTyping(sandboxID, userID)
 	}
 
-	if err := provider.Send(r.Context(), creds, rawUserID, req.Text, meta); err != nil {
-		log.Printf("nanoclaw im send: failed sandbox=%s provider=%s to=%s: %v", sandboxID, provider.Name(), rawUserID, err)
+	if err := provider.Send(r.Context(), creds, userID, req.Text, meta); err != nil {
+		log.Printf("nanoclaw im send: failed sandbox=%s provider=%s to=%s: %v", sandboxID, provider.Name(), userID, err)
 		http.Error(w, "failed to send message", http.StatusBadGateway)
 		return
 	}

@@ -147,11 +147,6 @@ func (b *Bridge) FindProviderByJID(jid string) Provider {
 	return nil
 }
 
-// StripJIDSuffix removes the provider's JID suffix from a full JID.
-func StripJIDSuffix(jid string, p Provider) string {
-	return strings.TrimSuffix(jid, p.JIDSuffix())
-}
-
 func typingKey(sandboxID, userID string) string {
 	return sandboxID + ":" + userID
 }
