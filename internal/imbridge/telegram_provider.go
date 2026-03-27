@@ -3,7 +3,9 @@ package imbridge
 import (
 	"context"
 	"fmt"
+	"log"
 	"strconv"
+	"time"
 )
 
 // TelegramProvider implements Provider for Telegram Bot API.
@@ -66,6 +68,52 @@ func (p *TelegramProvider) Poll(ctx context.Context, creds *Credentials, cursor 
 	}
 
 	return &PollResult{Messages: msgs, NewCursor: newCursor}, nil
+}
+
+// StartTyping implements TypingProvider for Telegram.
+// Sends "typing" chat action every 5s (Telegram auto-cancels after ~5s).
+// On timeout (5min), sends error notice and stops.
+func (p *TelegramProvider) StartTyping(ctx context.Context, creds *Credentials, userID string, meta map[string]string,
+	sendError func(text string)) (cancel func()) {
+
+	chatID, err := strconv.ParseInt(userID, 10, 64)
+	if err != nil {
+		return func() {}
+	}
+	baseURL := creds.BaseURL
+	if baseURL == "" {
+		baseURL = TelegramDefaultBaseURL
+	}
+
+	ctx, cancelFn := context.WithTimeout(ctx, 5*time.Minute)
+
+	go func() {
+		defer cancelFn()
+
+		// Send initial typing action.
+		if err := TelegramSendChatAction(ctx, baseURL, creds.BotToken, chatID, "typing"); err != nil {
+			log.Printf("imbridge: telegram sendChatAction failed for %s: %v", userID, err)
+		}
+
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				if ctx.Err() == context.DeadlineExceeded {
+					sendError("⚠️ 消息处理超时，请稍后重试。")
+				}
+				return
+			case <-ticker.C:
+				if err := TelegramSendChatAction(ctx, baseURL, creds.BotToken, chatID, "typing"); err != nil {
+					log.Printf("imbridge: telegram typing keepalive failed for %s: %v", userID, err)
+				}
+			}
+		}
+	}()
+
+	return cancelFn
 }
 
 func (p *TelegramProvider) Send(ctx context.Context, creds *Credentials, toUserID, text string, meta map[string]string) error {
