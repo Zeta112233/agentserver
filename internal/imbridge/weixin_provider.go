@@ -72,12 +72,9 @@ func (p *WeixinProvider) Send(ctx context.Context, creds *Credentials, toUserID,
 // It fetches a typing_ticket via GetConfig, then sends typing keepalives every 5s.
 // On timeout (5min), it sends an error notice to the user and stops.
 func (p *WeixinProvider) StartTyping(ctx context.Context, creds *Credentials, userID string, meta map[string]string,
-	sendError func(text string)) (cancel func()) {
-
-	ctx, cancelFn := context.WithTimeout(ctx, typingTimeout)
+	sendError func(text string)) {
 
 	go func() {
-		defer cancelFn()
 
 		contextToken := ""
 		if meta != nil {
@@ -128,6 +125,4 @@ func (p *WeixinProvider) StartTyping(ctx context.Context, creds *Credentials, us
 			}
 		}
 	}()
-
-	return cancelFn
 }

@@ -41,13 +41,11 @@ type PollResult struct {
 // Providers that implement this will have typing indicators started when messages
 // are forwarded to NanoClaw and stopped when replies are received.
 type TypingProvider interface {
-	// StartTyping begins sending typing indicators for a user.
-	// ctx controls the typing lifetime — cancel it to stop.
-	// meta carries provider-specific state (e.g. context_token).
-	// sendError is called if typing times out (to notify the user).
-	// Returns a cancel func to stop typing early (e.g. when reply arrives).
+	// StartTyping begins sending typing indicators for a user in a goroutine.
+	// Typing continues until ctx is cancelled or times out internally.
+	// sendError is called on timeout to notify the user.
 	StartTyping(ctx context.Context, creds *Credentials, userID string, meta map[string]string,
-		sendError func(text string)) (cancel func())
+		sendError func(text string))
 }
 
 // InboundMessage represents a single incoming message from the IM platform.

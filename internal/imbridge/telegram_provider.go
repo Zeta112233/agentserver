@@ -81,23 +81,19 @@ func (p *TelegramProvider) Poll(ctx context.Context, creds *Credentials, cursor 
 // Sends "typing" chat action every 5s (Telegram auto-cancels after ~5s).
 // On timeout (5min), sends error notice and stops.
 func (p *TelegramProvider) StartTyping(ctx context.Context, creds *Credentials, userID string, meta map[string]string,
-	sendError func(text string)) (cancel func()) {
+	sendError func(text string)) {
 
 	chatID, err := strconv.ParseInt(userID, 10, 64)
 	if err != nil {
-		return func() {}
+		return
 	}
 	baseURL := creds.BaseURL
 	if baseURL == "" {
 		baseURL = TelegramDefaultBaseURL
 	}
 
-	ctx, cancelFn := context.WithTimeout(ctx, 5*time.Minute)
-
 	go func() {
-		defer cancelFn()
-
-		// Send initial typing action.
+		// Send initial typing action immediately.
 		if err := TelegramSendChatAction(ctx, baseURL, creds.BotToken, chatID, "typing"); err != nil {
 			log.Printf("imbridge: telegram sendChatAction failed for %s: %v", userID, err)
 		}
@@ -119,8 +115,6 @@ func (p *TelegramProvider) StartTyping(ctx context.Context, creds *Credentials, 
 			}
 		}
 	}()
-
-	return cancelFn
 }
 
 func (p *TelegramProvider) Send(ctx context.Context, creds *Credentials, toUserID, text string, meta map[string]string) error {

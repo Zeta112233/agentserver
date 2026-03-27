@@ -161,24 +161,25 @@ func (b *Bridge) startTypingForUser(binding BridgeBinding, msg InboundMessage) {
 	sandboxID := binding.Credentials.SandboxID
 	key := typingKey(sandboxID, msg.FromUserID)
 
-	// Stop any existing typing session for this user.
-	b.mu.Lock()
-	if existingCancel, exists := b.typingSessions[key]; exists {
-		existingCancel()
-	}
-	b.mu.Unlock()
-
 	sendError := func(text string) {
 		if err := binding.Provider.Send(context.Background(), &binding.Credentials, msg.FromUserID, text, msg.Metadata); err != nil {
 			log.Printf("imbridge: failed to send error notice to %s: %v", msg.FromUserID, err)
 		}
 	}
 
-	cancel := tp.StartTyping(context.Background(), &binding.Credentials, msg.FromUserID, msg.Metadata, sendError)
+	// Create context and register cancel in map BEFORE starting the typing
+	// goroutine, so StopTyping can find it even if a reply arrives quickly.
+	ctx, cancelFn := context.WithCancel(context.Background())
 
 	b.mu.Lock()
-	b.typingSessions[key] = cancel
+	if existingCancel, exists := b.typingSessions[key]; exists {
+		existingCancel()
+	}
+	b.typingSessions[key] = cancelFn
 	b.mu.Unlock()
+
+	// Start typing asynchronously using the pre-registered context.
+	tp.StartTyping(ctx, &binding.Credentials, msg.FromUserID, msg.Metadata, sendError)
 }
 
 // StopTyping stops the typing indicator for a user in a sandbox.
