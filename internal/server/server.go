@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -2183,21 +2184,40 @@ func (s *Server) handleNanoclawIMSend(w http.ResponseWriter, r *http.Request) {
 
 	// Send media or text.
 	if len(mediaData) > 0 {
-		// Image upload flow: encrypt → CDN → sendmessage
-		contextToken := ""
-		if meta != nil {
-			contextToken = meta["context_token"]
-		}
-		if err := weixin.UploadAndSendImage(r.Context(), baseURL, "", botToken, userID, mediaData, contextToken); err != nil {
-			log.Printf("nanoclaw im send image: failed sandbox=%s to=%s: %v", sandboxID, userID, err)
-			http.Error(w, "failed to send image: "+err.Error(), http.StatusBadGateway)
-			return
-		}
-		// Send caption as separate text message if provided.
-		if reqMeta.Text != "" {
-			if err := provider.Send(r.Context(), &imbridge.Credentials{SandboxID: sandboxID, BotID: botID, BotToken: botToken, BaseURL: baseURL}, userID, reqMeta.Text, meta); err != nil {
-				log.Printf("nanoclaw im send caption: failed sandbox=%s to=%s: %v", sandboxID, userID, err)
+		switch provider.Name() {
+		case "weixin":
+			// WeChat: encrypt → CDN upload → sendmessage with image_item
+			contextToken := ""
+			if meta != nil {
+				contextToken = meta["context_token"]
 			}
+			if err := weixin.UploadAndSendImage(r.Context(), baseURL, "", botToken, userID, mediaData, contextToken); err != nil {
+				log.Printf("nanoclaw im send image: failed sandbox=%s to=%s: %v", sandboxID, userID, err)
+				http.Error(w, "failed to send image: "+err.Error(), http.StatusBadGateway)
+				return
+			}
+			// Send caption as separate text message if provided.
+			if reqMeta.Text != "" {
+				creds := &imbridge.Credentials{SandboxID: sandboxID, BotID: botID, BotToken: botToken, BaseURL: baseURL}
+				if err := provider.Send(r.Context(), creds, userID, reqMeta.Text, meta); err != nil {
+					log.Printf("nanoclaw im send caption: failed sandbox=%s to=%s: %v", sandboxID, userID, err)
+				}
+			}
+		case "telegram":
+			// Telegram: direct sendPhoto multipart upload
+			chatID, _ := strconv.ParseInt(userID, 10, 64)
+			tgBaseURL := baseURL
+			if tgBaseURL == "" {
+				tgBaseURL = imbridge.TelegramDefaultBaseURL
+			}
+			if err := imbridge.TelegramSendPhoto(r.Context(), tgBaseURL, botToken, chatID, mediaData, reqMeta.Text); err != nil {
+				log.Printf("nanoclaw im send photo: failed sandbox=%s to=%s: %v", sandboxID, userID, err)
+				http.Error(w, "failed to send photo: "+err.Error(), http.StatusBadGateway)
+				return
+			}
+		default:
+			http.Error(w, "image sending not supported for provider: "+provider.Name(), http.StatusBadRequest)
+			return
 		}
 	} else {
 		// Text-only message.

@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
+	"strconv"
 	"time"
 )
 
@@ -153,6 +155,49 @@ func TelegramSendMessage(ctx context.Context, baseURL, botToken string, chatID i
 	}
 	_, err := telegramRequest[json.RawMessage](ctx, baseURL, botToken, "sendMessage", body)
 	return err
+}
+
+// TelegramSendPhoto sends a photo to a chat via multipart upload.
+func TelegramSendPhoto(ctx context.Context, baseURL, botToken string, chatID int64, photoData []byte, caption string) error {
+	if baseURL == "" {
+		baseURL = TelegramDefaultBaseURL
+	}
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	w.WriteField("chat_id", strconv.FormatInt(chatID, 10))
+	if caption != "" {
+		w.WriteField("caption", caption)
+	}
+	part, err := w.CreateFormFile("photo", "image.png")
+	if err != nil {
+		return fmt.Errorf("create form file: %w", err)
+	}
+	if _, err := part.Write(photoData); err != nil {
+		return fmt.Errorf("write photo data: %w", err)
+	}
+	w.Close()
+
+	url := fmt.Sprintf("%s/bot%s/sendPhoto", baseURL, botToken)
+	req, err := http.NewRequestWithContext(ctx, "POST", url, &buf)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", w.FormDataContentType())
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("telegram sendPhoto: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("telegram sendPhoto: status %d: %s", resp.StatusCode, string(body))
+	}
+	return nil
 }
 
 // TelegramSendChatAction sends a typing indicator to a chat.
