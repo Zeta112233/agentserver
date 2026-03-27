@@ -451,11 +451,12 @@ if [ ! -f /mnt/session-data/.initialized ]; then
   cp -a /home/agent/. /mnt/session-data/ 2>/dev/null || true
   touch /mnt/session-data/.initialized
 fi
-chown -R 1000:1000 /mnt/session-data
 # Ensure projects directory exists (workspace PVC mount point)
 mkdir -p /mnt/session-data/projects
 # NanoClaw persistent directories (store for SQLite DB, data for IPC/sessions)
 mkdir -p /mnt/session-data/nanoclaw/store /mnt/session-data/nanoclaw/data
+# chown after mkdir so all directories are owned by UID 1000
+chown -R 1000:1000 /mnt/session-data
 `
 	// Add chown for each workspace volume.
 	for i := range opts.WorkspaceVolumes {
