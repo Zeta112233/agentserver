@@ -418,6 +418,14 @@ exec node openclaw.mjs gateway --allow-unconfigured --bind lan`}
 	volumeMounts := []corev1.VolumeMount{
 		{Name: "session-data", MountPath: "/home/agent"},
 	}
+	// NanoClaw: persist store (SQLite DB) and data (IPC/sessions) on PVC
+	// so they survive pause/resume.
+	if opts.SandboxType == "nanoclaw" {
+		volumeMounts = append(volumeMounts,
+			corev1.VolumeMount{Name: "session-data", MountPath: "/app/store", SubPath: "nanoclaw/store"},
+			corev1.VolumeMount{Name: "session-data", MountPath: "/app/data", SubPath: "nanoclaw/data"},
+		)
+	}
 	var volumes []corev1.Volume
 
 	// Mount workspace drive PVCs if provided.
@@ -446,6 +454,8 @@ fi
 chown -R 1000:1000 /mnt/session-data
 # Ensure projects directory exists (workspace PVC mount point)
 mkdir -p /mnt/session-data/projects
+# NanoClaw persistent directories (store for SQLite DB, data for IPC/sessions)
+mkdir -p /mnt/session-data/nanoclaw/store /mnt/session-data/nanoclaw/data
 `
 	// Add chown for each workspace volume.
 	for i := range opts.WorkspaceVolumes {
