@@ -308,6 +308,9 @@ func (b *Bridge) forwardToNanoClaw(ctx context.Context, binding BridgeBinding, m
 	if len(msg.MediaData) > 0 {
 		payload["media_data"] = base64.StdEncoding.EncodeToString(msg.MediaData)
 		payload["media_type"] = msg.MediaType
+		if msg.MediaFilename != "" {
+			payload["media_filename"] = msg.MediaFilename
+		}
 	}
 
 	body, err := json.Marshal(payload)

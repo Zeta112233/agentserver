@@ -70,10 +70,11 @@ func (p *WeixinProvider) Poll(ctx context.Context, creds *Credentials, cursor st
 			Metadata:   meta,
 		}
 
-		// Download image from CDN if present (best-effort, don't block on failure).
-		if imageData, mediaType := downloadWeixinMedia(creds, m.ItemList); imageData != nil {
-			msg.MediaData = imageData
+		// Download media from CDN if present (best-effort, don't block on failure).
+		if mediaData, mediaType, filename := downloadWeixinMedia(creds, m.ItemList); mediaData != nil {
+			msg.MediaData = mediaData
 			msg.MediaType = mediaType
+			msg.MediaFilename = filename
 		}
 
 		msgs = append(msgs, msg)
@@ -92,12 +93,13 @@ func hasMedia(items []weixin.MessageItem) bool {
 }
 
 // downloadWeixinMedia attempts to download the first media item from iLink CDN.
-// Returns (data, mediaType) or (nil, "") on failure or no media.
+// Returns (data, mediaType, filename) or (nil, "", "") on failure or no media.
 // Matches openclaw-weixin's downloadMediaFromItem AES key resolution:
 // prefers image_item.aeskey (hex) over image_item.media.aes_key (base64).
-func downloadWeixinMedia(creds *Credentials, items []weixin.MessageItem) ([]byte, string) {
+func downloadWeixinMedia(creds *Credentials, items []weixin.MessageItem) ([]byte, string, string) {
 	for _, item := range items {
-		if item.Type == 2 && item.ImageItem != nil && item.ImageItem.Media != nil {
+		switch {
+		case item.Type == 2 && item.ImageItem != nil && item.ImageItem.Media != nil:
 			media := item.ImageItem.Media
 			if media.EncryptQueryParam == "" {
 				continue
@@ -120,24 +122,41 @@ func downloadWeixinMedia(creds *Credentials, items []weixin.MessageItem) ([]byte
 			itemJSON, _ := json.Marshal(item)
 			log.Printf("imbridge: weixin image item: %s", string(itemJSON))
 
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			var data []byte
-			var err error
-			if aesKeyB64 != "" {
-				data, err = weixin.DownloadAndDecryptMedia(ctx, "", media.EncryptQueryParam, aesKeyB64, media.FullURL)
-			} else {
-				// No AES key — download plain (unencrypted)
-				data, err = weixin.DownloadFromCDN(ctx, "", media.EncryptQueryParam, media.FullURL)
-			}
-			cancel()
+			data, err := downloadFromCDN(media.EncryptQueryParam, aesKeyB64, media.FullURL)
 			if err != nil {
 				log.Printf("imbridge: weixin image download failed: %v", err)
 				continue
 			}
-			return data, "image"
+			return data, "image", ""
+
+		case item.Type == 4 && item.FileItem != nil && item.FileItem.Media != nil:
+			media := item.FileItem.Media
+			if media.EncryptQueryParam == "" {
+				continue
+			}
+
+			log.Printf("imbridge: weixin file item: name=%s size=%s", item.FileItem.FileName, item.FileItem.Len)
+
+			data, err := downloadFromCDN(media.EncryptQueryParam, media.AESKey, media.FullURL)
+			if err != nil {
+				log.Printf("imbridge: weixin file download failed: %v", err)
+				continue
+			}
+			return data, "file", item.FileItem.FileName
 		}
 	}
-	return nil, ""
+	return nil, "", ""
+}
+
+// downloadFromCDN downloads and optionally decrypts media from the WeChat CDN.
+func downloadFromCDN(encryptQueryParam, aesKeyB64, fullURL string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	if aesKeyB64 != "" {
+		return weixin.DownloadAndDecryptMedia(ctx, "", encryptQueryParam, aesKeyB64, fullURL)
+	}
+	return weixin.DownloadFromCDN(ctx, "", encryptQueryParam, fullURL)
 }
 
 // describeWeixinMedia returns a text description for non-text message items.
