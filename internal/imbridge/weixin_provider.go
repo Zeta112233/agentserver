@@ -124,10 +124,10 @@ func downloadWeixinMedia(creds *Credentials, items []weixin.MessageItem) ([]byte
 			var data []byte
 			var err error
 			if aesKeyB64 != "" {
-				data, err = weixin.DownloadAndDecryptMedia(ctx, "", media.EncryptQueryParam, aesKeyB64)
+				data, err = weixin.DownloadAndDecryptMedia(ctx, "", media.EncryptQueryParam, aesKeyB64, media.FullURL)
 			} else {
 				// No AES key — download plain (unencrypted)
-				data, err = weixin.DownloadFromCDN(ctx, "", media.EncryptQueryParam)
+				data, err = weixin.DownloadFromCDN(ctx, "", media.EncryptQueryParam, media.FullURL)
 			}
 			cancel()
 			if err != nil {

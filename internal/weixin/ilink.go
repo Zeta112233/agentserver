@@ -116,8 +116,9 @@ type ImageItem struct {
 // CDNMedia references a file uploaded to iLink CDN.
 type CDNMedia struct {
 	EncryptQueryParam string `json:"encrypt_query_param,omitempty"`
-	AESKey            string `json:"aes_key,omitempty"`    // base64-encoded
+	AESKey            string `json:"aes_key,omitempty"`      // base64-encoded
 	EncryptType       int    `json:"encrypt_type,omitempty"` // 1 = full packet encryption
+	FullURL           string `json:"full_url,omitempty"`     // server-provided download URL (preferred over client-side construction)
 }
 
 // WeixinMessage is a message from/to iLink.
@@ -625,15 +626,19 @@ func AESECBPaddedSize(plaintextSize int) int {
 	return (plaintextSize/16 + 1) * 16
 }
 
-// DownloadFromCDN downloads a file from the iLink CDN using encrypt_query_param.
-func DownloadFromCDN(ctx context.Context, cdnBaseURL, encryptQueryParam string) ([]byte, error) {
-	if cdnBaseURL == "" {
-		cdnBaseURL = DefaultCDNBaseURL
+// DownloadFromCDN downloads a file from the iLink CDN.
+// Prefers fullURL (server-provided) over client-side URL construction from encrypt_query_param.
+func DownloadFromCDN(ctx context.Context, cdnBaseURL, encryptQueryParam, fullURL string) ([]byte, error) {
+	var dlURL string
+	if fullURL != "" {
+		dlURL = fullURL
+	} else {
+		if cdnBaseURL == "" {
+			cdnBaseURL = DefaultCDNBaseURL
+		}
+		dlURL = fmt.Sprintf("%s/download?encrypted_query_param=%s",
+			cdnBaseURL, url.QueryEscape(encryptQueryParam))
 	}
-	// Try both URL formats: first as a direct query string parameter,
-	// then with the param name. CDN API may expect either format.
-	dlURL := fmt.Sprintf("%s/download?encrypted_query_param=%s",
-		cdnBaseURL, url.QueryEscape(encryptQueryParam))
 
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
@@ -685,7 +690,8 @@ func DecryptAESECB(ciphertext, key []byte) ([]byte, error) {
 // DownloadAndDecryptMedia downloads and decrypts a media file from iLink CDN.
 // aesKeyBase64 is the base64-encoded AES key from the CDNMedia.aes_key field.
 // Also supports hex-encoded keys wrapped in base64 (32 hex chars).
-func DownloadAndDecryptMedia(ctx context.Context, cdnBaseURL, encryptQueryParam, aesKeyBase64 string) ([]byte, error) {
+// fullURL, if non-empty, is used directly instead of constructing from encryptQueryParam.
+func DownloadAndDecryptMedia(ctx context.Context, cdnBaseURL, encryptQueryParam, aesKeyBase64, fullURL string) ([]byte, error) {
 	// Parse AES key (supports two formats, matching openclaw-weixin's parseAesKey)
 	decoded, err := base64.StdEncoding.DecodeString(aesKeyBase64)
 	if err != nil {
@@ -704,7 +710,7 @@ func DownloadAndDecryptMedia(ctx context.Context, cdnBaseURL, encryptQueryParam,
 		return nil, fmt.Errorf("aes key must be 16 raw bytes or 32-char hex, got %d bytes", len(decoded))
 	}
 
-	encrypted, err := DownloadFromCDN(ctx, cdnBaseURL, encryptQueryParam)
+	encrypted, err := DownloadFromCDN(ctx, cdnBaseURL, encryptQueryParam, fullURL)
 	if err != nil {
 		return nil, err
 	}
