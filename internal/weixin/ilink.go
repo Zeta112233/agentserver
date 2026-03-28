@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 )
@@ -719,13 +720,57 @@ func DownloadAndDecryptMedia(ctx context.Context, cdnBaseURL, encryptQueryParam,
 }
 
 // ExtractText extracts the text content from a WeixinMessage.
+// Mirrors openclaw-weixin's bodyFromItemList:
+//   - TEXT items with ref_msg get a "[引用: ...]" prefix (unless the ref is media)
+//   - VOICE items with speech-to-text use the transcribed text
+//   - ref_msg content is resolved recursively
 func ExtractText(msg WeixinMessage) string {
-	for _, item := range msg.ItemList {
+	return bodyFromItemList(msg.ItemList)
+}
+
+// bodyFromItemList extracts text from a list of message items, handling
+// quoted messages and voice transcription. Mirrors the openclaw-weixin
+// TypeScript implementation.
+func bodyFromItemList(items []MessageItem) string {
+	for _, item := range items {
+		// Text message (type 1)
 		if item.Type == 1 && item.TextItem != nil {
-			return item.TextItem.Text
+			text := item.TextItem.Text
+			ref := item.RefMsg
+			if ref == nil {
+				return text
+			}
+			// Quoted media is handled separately (via MediaPath); skip the quote prefix.
+			if ref.MessageItem != nil && isMediaItem(ref.MessageItem) {
+				return text
+			}
+			// Build quoted context from title and/or referenced message body.
+			var parts []string
+			if ref.Title != "" {
+				parts = append(parts, ref.Title)
+			}
+			if ref.MessageItem != nil {
+				refBody := bodyFromItemList([]MessageItem{*ref.MessageItem})
+				if refBody != "" {
+					parts = append(parts, refBody)
+				}
+			}
+			if len(parts) == 0 {
+				return text
+			}
+			return "[引用: " + strings.Join(parts, " | ") + "]\n" + text
+		}
+		// Voice message with speech-to-text (type 3)
+		if item.Type == 3 && item.VoiceItem != nil && item.VoiceItem.Text != "" {
+			return item.VoiceItem.Text
 		}
 	}
 	return ""
+}
+
+// isMediaItem returns true if the message item is image, voice, file, or video.
+func isMediaItem(item *MessageItem) bool {
+	return item.Type == 2 || item.Type == 3 || item.Type == 4 || item.Type == 5
 }
 
 // GetConfigResponse is the response from ilink/bot/getconfig.
