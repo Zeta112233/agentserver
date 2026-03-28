@@ -381,7 +381,7 @@ if (inject.gateway) {
 }
 if (inject.models) existing.models = inject.models;
 fs.writeFileSync(path, JSON.stringify(existing, null, 2));
-" && exec node openclaw.mjs gateway --allow-unconfigured --bind lan`}
+" && while node openclaw.mjs gateway --allow-unconfigured --bind lan; do echo 'openclaw exited, restarting...'; sleep 1; done`}
 		containerEnv = append(containerEnv, corev1.EnvVar{Name: "__OPENCLAW_INJECT_CFG", Value: openclawCfg})
 		// Ensure ~ resolves to the PVC mount so credentials and conversation
 		// data persist across pause/resume.
