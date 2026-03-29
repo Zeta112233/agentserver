@@ -99,6 +99,9 @@ func (cc *MatrixCryptoClient) SyncAndDecrypt(ctx context.Context, selfUserID str
 
 	var messages []MatrixMessage
 	for roomID, joinedRoom := range resp.Rooms.Join {
+		if len(joinedRoom.Timeline.Events) > 0 {
+			log.Printf("matrix: processing %d timeline events in room %s", len(joinedRoom.Timeline.Events), roomID)
+		}
 		for _, evt := range joinedRoom.Timeline.Events {
 			evt.RoomID = id.RoomID(roomID)
 
@@ -123,6 +126,7 @@ func (cc *MatrixCryptoClient) SyncAndDecrypt(ctx context.Context, selfUserID str
 					}
 				}
 				evt = decrypted
+				log.Printf("matrix: decrypted event %s type=%s sender=%s", evt.ID, evt.Type.Type, evt.Sender)
 			}
 
 			if evt.Type != event.EventMessage {
@@ -240,7 +244,17 @@ func NewMatrixCryptoManager(mainDBURL string, encKey []byte) *MatrixCryptoManage
 // token share the same client.
 // If recoveryKey is non-empty, it's used to self-verify the device via SSSS cross-signing.
 func (m *MatrixCryptoManager) GetOrCreate(ctx context.Context, creds *Credentials, recoveryKey string) (*MatrixCryptoClient, error) {
-	// Create a temporary client to get the device ID bound to this token.
+	// Fast path: check if any client exists for this bot (avoid Whoami on every poll).
+	m.mu.Lock()
+	for key, c := range m.clients {
+		if strings.HasPrefix(key, creds.BotID+":") {
+			m.mu.Unlock()
+			return c, nil
+		}
+	}
+	m.mu.Unlock()
+
+	// Slow path: no client yet — call Whoami to get device ID and create one.
 	client, err := mautrix.NewClient(creds.BaseURL, id.UserID(creds.BotID), creds.BotToken)
 	if err != nil {
 		return nil, fmt.Errorf("matrix crypto: create client: %w", err)
@@ -253,6 +267,7 @@ func (m *MatrixCryptoManager) GetOrCreate(ctx context.Context, creds *Credential
 
 	key := creds.BotID + ":" + string(resp.DeviceID)
 
+	// Double-check after Whoami.
 	m.mu.Lock()
 	if c, ok := m.clients[key]; ok {
 		m.mu.Unlock()
