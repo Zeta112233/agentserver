@@ -221,6 +221,7 @@ func (b *Bridge) pollLoop(ctx context.Context, binding BridgeBinding) {
 			return
 		}
 
+		log.Printf("imbridge: polling sandbox=%s provider=%s cursor=%q", sandboxID, providerName, cursor)
 		result, err := binding.Provider.Poll(ctx, &binding.Credentials, cursor)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -244,6 +245,7 @@ func (b *Bridge) pollLoop(ctx context.Context, binding BridgeBinding) {
 		}
 
 		consecutiveFailures = 0
+		log.Printf("imbridge: poll ok sandbox=%s provider=%s msgs=%d newCursor=%q", sandboxID, providerName, len(result.Messages), result.NewCursor)
 
 		// Forward messages BEFORE advancing cursor.
 		allForwarded := true
