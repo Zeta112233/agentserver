@@ -413,11 +413,7 @@ func sanitizeFolder(jid string) string {
 			out = append(out, '-')
 		}
 	}
-	s := string(out)
-	if len(s) > 0 && s[0] == '-' {
-		s = "im" + s
-	}
-	return s
+	return "im-" + string(out)
 }
 
 // sleepCtx sleeps for the given duration or until the context is cancelled.
