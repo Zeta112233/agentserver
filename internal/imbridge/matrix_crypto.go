@@ -201,44 +201,41 @@ func (m *MatrixCryptoManager) GetOrCreate(ctx context.Context, creds *Credential
 		return nil, fmt.Errorf("matrix crypto: create client: %w", err)
 	}
 
-	// Don't pre-set DeviceID — let the CryptoHelper manage device identity.
-	// If the crypto DB has a stored device, it will reuse it.
-	// If not, it will create a new device rather than conflicting with
-	// stale keys from a previous Olm account on the server.
-
-	// Each client gets its own *sql.DB because CryptoHelper.Close()
-	// closes the underlying connection.
-	sqlDB, err := sql.Open("postgres", m.cryptoDBURL)
+	// Get the device ID bound to this access token.
+	resp, err := client.Whoami(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("matrix crypto: open db: %w", err)
+		return nil, fmt.Errorf("matrix crypto: whoami: %w", err)
 	}
-	sqlDB.SetMaxOpenConns(3)
-	sqlDB.SetMaxIdleConns(1)
+	client.DeviceID = resp.DeviceID
 
-	cryptoDB, err := dbutil.NewWithDB(sqlDB, "postgres")
+	cc, err := m.initCryptoHelper(ctx, client, key, recoveryKey)
 	if err != nil {
-		sqlDB.Close()
-		return nil, fmt.Errorf("matrix crypto: wrap db: %w", err)
+		// If init fails because the crypto DB is fresh but the server has
+		// stale keys from a previous Olm account, delete the old device
+		// and retry with a clean slate.
+		if strings.Contains(err.Error(), "not marked as shared, but there are keys on the server") {
+			log.Printf("matrix crypto: stale device keys detected, deleting device %s and retrying", client.DeviceID)
+			// Delete the old device (unauthed delete works on some homeservers for bot tokens).
+			delURL := client.BuildClientURL("v3", "devices", string(client.DeviceID))
+			delReq, _ := http.NewRequestWithContext(ctx, "DELETE", delURL, nil)
+			delReq.Header.Set("Authorization", "Bearer "+client.AccessToken)
+			if delResp, delErr := http.DefaultClient.Do(delReq); delErr == nil {
+				delResp.Body.Close()
+			}
+			// Whoami again to get new device ID (if server auto-creates).
+			if resp2, err2 := client.Whoami(ctx); err2 == nil && resp2.DeviceID != "" {
+				client.DeviceID = resp2.DeviceID
+			}
+			cc, err = m.initCryptoHelper(ctx, client, key, recoveryKey)
+		}
+		if err != nil {
+			return nil, err
+		}
 	}
 
-	// Create crypto helper. DBAccountID is based on botID so all sandboxes
-	// using the same bot share the same Olm account and device keys.
-	helper, err := cryptohelper.NewCryptoHelper(client, m.encKey, cryptoDB)
-	if err != nil {
-		sqlDB.Close()
-		return nil, fmt.Errorf("matrix crypto: new helper: %w", err)
-	}
-	helper.DBAccountID = key
-	helper.MSC4190 = true // Allow creating a new bot device if needed.
-
-	if err := helper.Init(ctx); err != nil {
-		sqlDB.Close()
-		return nil, fmt.Errorf("matrix crypto: init: %w", err)
-	}
-
-	// Self-verify and download key backup via recovery key if provided.
+	// Self-verify and download key backup.
 	if recoveryKey != "" {
-		mach := helper.Machine()
+		mach := cc.cryptoHelper.Machine()
 		if err := mach.VerifyWithRecoveryKey(ctx, recoveryKey); err != nil {
 			log.Printf("matrix crypto: self-verify failed (continuing anyway): %v", err)
 		} else {
@@ -251,13 +248,10 @@ func (m *MatrixCryptoManager) GetOrCreate(ctx context.Context, creds *Credential
 		}
 	}
 
-	cc := &MatrixCryptoClient{client: client, cryptoHelper: helper}
-
 	m.mu.Lock()
-	// Check again in case another goroutine created it while we were initializing.
 	if existing, ok := m.clients[key]; ok {
 		m.mu.Unlock()
-		helper.Close()
+		cc.cryptoHelper.Close()
 		return existing, nil
 	}
 	m.clients[key] = cc
@@ -281,6 +275,37 @@ func (m *MatrixCryptoManager) Remove(sandboxID, botID string) {
 	if ok && cc.cryptoHelper != nil {
 		cc.cryptoHelper.Close()
 	}
+}
+
+// initCryptoHelper creates a DB connection, crypto helper, and initializes it.
+// Returns a MatrixCryptoClient on success.
+func (m *MatrixCryptoManager) initCryptoHelper(ctx context.Context, client *mautrix.Client, accountID, recoveryKey string) (*MatrixCryptoClient, error) {
+	sqlDB, err := sql.Open("postgres", m.cryptoDBURL)
+	if err != nil {
+		return nil, fmt.Errorf("matrix crypto: open db: %w", err)
+	}
+	sqlDB.SetMaxOpenConns(3)
+	sqlDB.SetMaxIdleConns(1)
+
+	cryptoDB, err := dbutil.NewWithDB(sqlDB, "postgres")
+	if err != nil {
+		sqlDB.Close()
+		return nil, fmt.Errorf("matrix crypto: wrap db: %w", err)
+	}
+
+	helper, err := cryptohelper.NewCryptoHelper(client, m.encKey, cryptoDB)
+	if err != nil {
+		sqlDB.Close()
+		return nil, fmt.Errorf("matrix crypto: new helper: %w", err)
+	}
+	helper.DBAccountID = accountID
+
+	if err := helper.Init(ctx); err != nil {
+		sqlDB.Close()
+		return nil, fmt.Errorf("matrix crypto: init: %w", err)
+	}
+
+	return &MatrixCryptoClient{client: client, cryptoHelper: helper}, nil
 }
 
 // fetchAndStoreKeyBackup downloads the key backup from the server using the recovery key.
