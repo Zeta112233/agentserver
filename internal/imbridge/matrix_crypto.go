@@ -77,8 +77,9 @@ func (cc *MatrixCryptoClient) SyncAndDecrypt(ctx context.Context, selfUserID str
 	// we can't decrypt, so they're available when real polling starts.
 	// Don't return messages — they're historical.
 	if initialSync {
-		for _, joinedRoom := range resp.Rooms.Join {
+		for roomID, joinedRoom := range resp.Rooms.Join {
 			for _, evt := range joinedRoom.Timeline.Events {
+				evt.RoomID = id.RoomID(roomID)
 				if evt.Type != event.EventEncrypted {
 					continue
 				}
@@ -99,6 +100,8 @@ func (cc *MatrixCryptoClient) SyncAndDecrypt(ctx context.Context, selfUserID str
 	var messages []MatrixMessage
 	for roomID, joinedRoom := range resp.Rooms.Join {
 		for _, evt := range joinedRoom.Timeline.Events {
+			evt.RoomID = id.RoomID(roomID)
+
 			// Decrypt encrypted events.
 			if evt.Type == event.EventEncrypted {
 				if parseErr := evt.Content.ParseRaw(evt.Type); parseErr != nil {
