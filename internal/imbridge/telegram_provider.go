@@ -93,19 +93,22 @@ func (p *TelegramProvider) Poll(ctx context.Context, creds *Credentials, cursor 
 
 		// Download photo (pick largest size) or document.
 		if len(u.Message.Photo) > 0 {
-			// Telegram sends multiple photo sizes; pick the largest (last).
 			best := u.Message.Photo[len(u.Message.Photo)-1]
+			log.Printf("imbridge: telegram downloading photo file_id=%s size=%d", best.FileID, best.FileSize)
 			if data, err := TelegramGetFile(ctx, baseURL, creds.BotToken, best.FileID); err == nil {
 				msg.MediaData = data
 				msg.MediaType = "image"
+				log.Printf("imbridge: telegram photo downloaded (%d bytes)", len(data))
 			} else {
 				log.Printf("imbridge: telegram photo download failed: %v", err)
 			}
 		} else if u.Message.Document != nil {
+			log.Printf("imbridge: telegram downloading document file_id=%s name=%s", u.Message.Document.FileID, u.Message.Document.FileName)
 			if data, err := TelegramGetFile(ctx, baseURL, creds.BotToken, u.Message.Document.FileID); err == nil {
 				msg.MediaData = data
 				msg.MediaType = "file"
 				msg.MediaFilename = u.Message.Document.FileName
+				log.Printf("imbridge: telegram document downloaded (%d bytes)", len(data))
 			} else {
 				log.Printf("imbridge: telegram document download failed: %v", err)
 			}
