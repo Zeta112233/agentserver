@@ -128,7 +128,7 @@ func (s *Server) InitMatrixE2EE() {
 	if len(encKey) == 0 {
 		encKey = []byte("agentserver-matrix-default-key-01")
 	}
-	mp.CryptoManager = imbridge.NewMatrixCryptoManager(s.DatabaseURL, encKey, s.DB)
+	mp.CryptoManager = imbridge.NewMatrixCryptoManager(s.DatabaseURL, encKey)
 	log.Println("Matrix E2EE crypto manager initialized")
 }
 

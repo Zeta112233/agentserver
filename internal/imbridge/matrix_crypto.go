@@ -52,6 +52,9 @@ func (cc *MatrixCryptoClient) SyncAndDecrypt(ctx context.Context, selfUserID str
 		for _, evt := range joinedRoom.Timeline.Events {
 			// Decrypt encrypted events.
 			if evt.Type == event.EventEncrypted {
+				if parseErr := evt.Content.ParseRaw(evt.Type); parseErr != nil {
+					continue
+				}
 				decrypted, decErr := mach.DecryptMegolmEvent(ctx, evt)
 				if decErr != nil {
 					log.Printf("matrix: decrypt failed room=%s event=%s: %v", roomID, evt.ID, decErr)
@@ -148,33 +151,33 @@ func (cc *MatrixCryptoClient) SendTyping(ctx context.Context, roomID string, typ
 	return nil
 }
 
-// MatrixCryptoManager manages long-lived E2EE Matrix clients per binding.
+// MatrixCryptoManager manages long-lived E2EE Matrix clients per bot account.
 type MatrixCryptoManager struct {
-	clients     map[string]*MatrixCryptoClient
+	clients     map[string]*MatrixCryptoClient // keyed by botID
 	mu          sync.Mutex
 	cryptoDBURL string
 	encKey      []byte
-	db          BridgeDB // for reading/writing device_id in provider_meta
 }
 
 // NewMatrixCryptoManager creates a manager for E2EE Matrix clients.
 // mainDBURL is the PostgreSQL connection URL for the main database.
 // The crypto database (agentserver_matrix) is derived from it and created if it doesn't exist.
-func NewMatrixCryptoManager(mainDBURL string, encKey []byte, db BridgeDB) *MatrixCryptoManager {
+func NewMatrixCryptoManager(mainDBURL string, encKey []byte) *MatrixCryptoManager {
 	cryptoDBURL := deriveCryptoDBURL(mainDBURL)
 	ensureCryptoDB(mainDBURL)
 	return &MatrixCryptoManager{
 		clients:     make(map[string]*MatrixCryptoClient),
 		cryptoDBURL: cryptoDBURL,
 		encKey:      encKey,
-		db:          db,
 	}
 }
 
 // GetOrCreate returns an existing crypto client or creates a new one.
+// Clients are keyed by botID (not sandboxID) so all sandboxes using the
+// same bot token share the same Olm account and device identity.
 // If recoveryKey is non-empty, it's used to self-verify the device via SSSS cross-signing.
 func (m *MatrixCryptoManager) GetOrCreate(ctx context.Context, creds *Credentials, recoveryKey string) (*MatrixCryptoClient, error) {
-	key := creds.SandboxID + ":" + creds.BotID
+	key := creds.BotID
 
 	m.mu.Lock()
 	if c, ok := m.clients[key]; ok {
@@ -189,21 +192,15 @@ func (m *MatrixCryptoManager) GetOrCreate(ctx context.Context, creds *Credential
 		return nil, fmt.Errorf("matrix crypto: create client: %w", err)
 	}
 
-	// Get device ID: try saved value first, then Whoami.
-	deviceID, _ := m.db.GetProviderMeta(creds.SandboxID, "matrix", creds.BotID, creds.BotID, "device_id")
-	if deviceID != "" {
-		client.DeviceID = id.DeviceID(deviceID)
-	} else {
-		resp, err := client.Whoami(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("matrix crypto: whoami: %w", err)
-		}
-		client.DeviceID = resp.DeviceID
+	// Get device ID from Whoami (the token is bound to a specific device).
+	resp, err := client.Whoami(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("matrix crypto: whoami: %w", err)
 	}
+	client.DeviceID = resp.DeviceID
 
-	// Each binding gets its own *sql.DB because CryptoHelper.Close()
-	// closes the underlying connection. Limit pool size to avoid
-	// exhausting PostgreSQL's connection limit with many bindings.
+	// Each client gets its own *sql.DB because CryptoHelper.Close()
+	// closes the underlying connection.
 	sqlDB, err := sql.Open("postgres", m.cryptoDBURL)
 	if err != nil {
 		return nil, fmt.Errorf("matrix crypto: open db: %w", err)
@@ -217,7 +214,8 @@ func (m *MatrixCryptoManager) GetOrCreate(ctx context.Context, creds *Credential
 		return nil, fmt.Errorf("matrix crypto: wrap db: %w", err)
 	}
 
-	// Create crypto helper.
+	// Create crypto helper. DBAccountID is based on botID so all sandboxes
+	// using the same bot share the same Olm account and device keys.
 	helper, err := cryptohelper.NewCryptoHelper(client, m.encKey, cryptoDB)
 	if err != nil {
 		sqlDB.Close()
@@ -228,13 +226,6 @@ func (m *MatrixCryptoManager) GetOrCreate(ctx context.Context, creds *Credential
 	if err := helper.Init(ctx); err != nil {
 		sqlDB.Close()
 		return nil, fmt.Errorf("matrix crypto: init: %w", err)
-	}
-
-	// Save device ID for future restarts.
-	if string(client.DeviceID) != deviceID {
-		if err := m.db.UpsertProviderMeta(creds.SandboxID, "matrix", creds.BotID, creds.BotID, "device_id", string(client.DeviceID)); err != nil {
-			log.Printf("matrix crypto: failed to save device_id: %v", err)
-		}
 	}
 
 	// Self-verify via recovery key if provided.
@@ -262,9 +253,9 @@ func (m *MatrixCryptoManager) GetOrCreate(ctx context.Context, creds *Credential
 	return cc, nil
 }
 
-// Remove closes and removes a crypto client for a binding.
+// Remove closes and removes a crypto client for a bot.
 func (m *MatrixCryptoManager) Remove(sandboxID, botID string) {
-	key := sandboxID + ":" + botID
+	key := botID
 
 	m.mu.Lock()
 	cc, ok := m.clients[key]
