@@ -2170,28 +2170,19 @@ func (s *Server) handleNanoclawIMSend(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "failed to send photo: "+err.Error(), http.StatusBadGateway)
 				return
 			}
-		case "matrix":
-			// Matrix: upload to content repository → send m.image event (auto-encrypts via crypto client)
-			roomID := strings.TrimSuffix(userID, "@matrix")
-			var sendErr error
-			if mp, ok := provider.(*imbridge.MatrixProvider); ok && mp.CryptoManager != nil {
-				creds := imbridge.Credentials{SandboxID: sandboxID, BotID: botID, BotToken: botToken, BaseURL: baseURL}
-				if cc, err := mp.CryptoManager.GetOrCreate(r.Context(), &creds, ""); err == nil {
-					sendErr = cc.SendImage(r.Context(), roomID, mediaData, reqMeta.Text)
-				} else {
-					sendErr = imbridge.MatrixSendImage(r.Context(), baseURL, botToken, roomID, mediaData, reqMeta.Text)
-				}
-			} else {
-				sendErr = imbridge.MatrixSendImage(r.Context(), baseURL, botToken, roomID, mediaData, reqMeta.Text)
-			}
-			if sendErr != nil {
-				log.Printf("nanoclaw im send image: failed sandbox=%s to=%s: %v", sandboxID, userID, sendErr)
-				http.Error(w, "failed to send image: "+sendErr.Error(), http.StatusBadGateway)
+		default:
+			// Generic image sending via ImageSendProvider interface.
+			isp, ok := provider.(imbridge.ImageSendProvider)
+			if !ok {
+				http.Error(w, "image sending not supported for provider: "+provider.Name(), http.StatusBadRequest)
 				return
 			}
-		default:
-			http.Error(w, "image sending not supported for provider: "+provider.Name(), http.StatusBadRequest)
-			return
+			creds := &imbridge.Credentials{SandboxID: sandboxID, BotID: botID, BotToken: botToken, BaseURL: baseURL}
+			if err := isp.SendImage(r.Context(), creds, userID, mediaData, reqMeta.Text); err != nil {
+				log.Printf("nanoclaw im send image: failed sandbox=%s to=%s: %v", sandboxID, userID, err)
+				http.Error(w, "failed to send image: "+err.Error(), http.StatusBadGateway)
+				return
+			}
 		}
 	} else {
 		// Text-only message.
@@ -2367,18 +2358,18 @@ func (s *Server) handleIMMatrixConfigure(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Initialize E2EE crypto client and self-verify if recovery key is provided.
-	matrixProvider := s.IMBridge.GetProvider("matrix")
-	if mp, ok := matrixProvider.(*imbridge.MatrixProvider); ok && mp.CryptoManager != nil {
+	// Initialize E2EE if the provider supports it and recovery key is provided.
+	provider := s.IMBridge.GetProvider("matrix")
+	if e2ee, ok := provider.(imbridge.E2EEProvider); ok {
 		creds := imbridge.Credentials{SandboxID: id, BotID: botID, BotToken: req.AccessToken, BaseURL: req.HomeserverURL}
-		if _, err := mp.CryptoManager.GetOrCreate(r.Context(), &creds, req.RecoveryKey); err != nil {
-			log.Printf("matrix configure: crypto init failed (E2EE may not work): %v", err)
+		if err := e2ee.InitE2EE(r.Context(), &creds, req.RecoveryKey); err != nil {
+			log.Printf("matrix configure: E2EE init failed: %v", err)
 		}
 	}
 
 	if sbx.PodIP != "" && s.IMBridge != nil {
 		s.IMBridge.StartPoller(imbridge.BridgeBinding{
-			Provider:     matrixProvider,
+			Provider:     provider,
 			Credentials:  imbridge.Credentials{SandboxID: id, BotID: botID, BotToken: req.AccessToken, BaseURL: req.HomeserverURL},
 			Cursor:       "",
 			BridgeSecret: sbx.NanoclawBridgeSecret,
@@ -2411,14 +2402,13 @@ func (s *Server) handleIMMatrixDisconnect(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	matrixProvider := s.IMBridge.GetProvider("matrix")
+	provider := s.IMBridge.GetProvider("matrix")
 	for _, b := range bindings {
 		if s.IMBridge != nil {
 			s.IMBridge.StopPoller(id, "matrix", b.BotID)
 		}
-		// Clean up E2EE crypto client (closes its DB connection).
-		if mp, ok := matrixProvider.(*imbridge.MatrixProvider); ok {
-			mp.Cleanup(id, b.BotID)
+		if e2ee, ok := provider.(imbridge.E2EEProvider); ok {
+			e2ee.CleanupE2EE(id, b.BotID)
 		}
 		if err := s.DB.DeleteIMBinding(id, "matrix", b.BotID); err != nil {
 			log.Printf("matrix disconnect: delete binding: %v", err)

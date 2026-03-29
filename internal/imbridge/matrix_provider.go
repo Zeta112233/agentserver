@@ -14,7 +14,7 @@ const (
 	matrixTypingTotalTimeout = 5 * time.Minute
 )
 
-// MatrixProvider implements Provider, TypingProvider, and CleanupProvider for the Matrix protocol.
+// MatrixProvider implements Provider, TypingProvider, ImageSendProvider, and E2EEProvider for Matrix.
 type MatrixProvider struct {
 	CryptoManager *MatrixCryptoManager
 }
@@ -107,6 +107,21 @@ func (p *MatrixProvider) Send(ctx context.Context, creds *Credentials, toUserID,
 	return MatrixSendText(ctx, creds.BaseURL, creds.BotToken, roomID, text)
 }
 
+// SendImage implements ImageSendProvider for Matrix.
+func (p *MatrixProvider) SendImage(ctx context.Context, creds *Credentials, toUserID string, imageData []byte, caption string) error {
+	roomID := strings.TrimSuffix(toUserID, "@matrix")
+
+	if p.CryptoManager != nil {
+		cc, err := p.CryptoManager.GetOrCreate(ctx, creds, "")
+		if err != nil {
+			return err
+		}
+		return cc.SendImage(ctx, roomID, imageData, caption)
+	}
+
+	return MatrixSendImage(ctx, creds.BaseURL, creds.BotToken, roomID, imageData, caption)
+}
+
 // StartTyping implements TypingProvider for Matrix.
 func (p *MatrixProvider) StartTyping(ctx context.Context, creds *Credentials, userID string, meta map[string]string,
 	sendError func(text string)) {
@@ -156,8 +171,17 @@ func (p *MatrixProvider) StartTyping(ctx context.Context, creds *Credentials, us
 	}()
 }
 
-// Cleanup implements CleanupProvider — closes the E2EE client when a poller stops.
-func (p *MatrixProvider) Cleanup(sandboxID, botID string) {
+// InitE2EE implements E2EEProvider — initializes E2EE and self-verifies with recovery key.
+func (p *MatrixProvider) InitE2EE(ctx context.Context, creds *Credentials, recoveryKey string) error {
+	if p.CryptoManager == nil {
+		return nil
+	}
+	_, err := p.CryptoManager.GetOrCreate(ctx, creds, recoveryKey)
+	return err
+}
+
+// CleanupE2EE implements E2EEProvider — closes the E2EE client when a binding is disconnected.
+func (p *MatrixProvider) CleanupE2EE(sandboxID, botID string) {
 	if p.CryptoManager != nil {
 		p.CryptoManager.Remove(sandboxID, botID)
 	}

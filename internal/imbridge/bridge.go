@@ -113,7 +113,7 @@ func (b *Bridge) StartPoller(binding BridgeBinding) {
 
 // StopPoller stops the polling goroutine for a specific binding.
 // This only cancels the goroutine; it does NOT clean up provider resources
-// like E2EE crypto clients. Use CleanupProvider.Cleanup for that.
+// like E2EE crypto clients. Use E2EEProvider.CleanupE2EE for that.
 func (b *Bridge) StopPoller(sandboxID, provider, botID string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()

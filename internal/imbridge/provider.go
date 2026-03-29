@@ -48,10 +48,17 @@ type TypingProvider interface {
 		sendError func(text string))
 }
 
-// CleanupProvider is an optional interface for providers that need cleanup
-// when a poller is stopped (e.g., closing long-lived crypto sessions).
-type CleanupProvider interface {
-	Cleanup(sandboxID, botID string)
+// ImageSendProvider is an optional interface for providers that support sending images.
+type ImageSendProvider interface {
+	SendImage(ctx context.Context, creds *Credentials, toUserID string, imageData []byte, caption string) error
+}
+
+// E2EEProvider is an optional interface for providers that support E2EE.
+type E2EEProvider interface {
+	// InitE2EE initializes E2EE for a binding. recoveryKey is used for self-verification.
+	InitE2EE(ctx context.Context, creds *Credentials, recoveryKey string) error
+	// CleanupE2EE closes E2EE resources for a binding.
+	CleanupE2EE(sandboxID, botID string)
 }
 
 // InboundMessage represents a single incoming message from the IM platform.
