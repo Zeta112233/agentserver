@@ -55,7 +55,7 @@ func (cc *MatrixCryptoClient) SyncAndDecrypt(ctx context.Context, selfUserID str
 	// This is essential for: knowing which rooms are encrypted (IsEncrypted),
 	// tracking room membership (for key sharing), and handling member changes.
 	for roomID, joinedRoom := range resp.Rooms.Join {
-		allStateEvents := joinedRoom.State.Events
+		allStateEvents := append([]*event.Event(nil), joinedRoom.State.Events...)
 		for _, evt := range joinedRoom.Timeline.Events {
 			if evt.StateKey != nil {
 				allStateEvents = append(allStateEvents, evt)
@@ -88,8 +88,19 @@ func (cc *MatrixCryptoClient) SyncAndDecrypt(ctx context.Context, selfUserID str
 				}
 				decrypted, decErr := mach.DecryptMegolmEvent(ctx, evt)
 				if decErr != nil {
-					log.Printf("matrix: decrypt failed room=%s event=%s: %v", roomID, evt.ID, decErr)
-					continue
+					// Request the missing session key and wait for it to arrive.
+					content := evt.Content.AsEncrypted()
+					if content != nil {
+						cc.client.Crypto.RequestSession(ctx, evt.RoomID, content.SenderKey, content.SessionID, evt.Sender, content.DeviceID)
+						if mach.WaitForSession(ctx, evt.RoomID, content.SenderKey, content.SessionID, 5*time.Second) {
+							// Retry decryption after receiving the key.
+							decrypted, decErr = mach.DecryptMegolmEvent(ctx, evt)
+						}
+					}
+					if decErr != nil {
+						log.Printf("matrix: decrypt failed room=%s event=%s: %v", roomID, evt.ID, decErr)
+						continue
+					}
 				}
 				evt = decrypted
 			}
@@ -331,7 +342,7 @@ func fetchAndStoreKeyBackup(ctx context.Context, client *mautrix.Client, mach *c
 	}
 
 	// Decrypt the megolm backup key from SSSS.
-	backupKeyBytes, err := ssssMachine.GetDecryptedAccountData(ctx, event.Type{Type: string(id.SecretMegolmBackupV1), Class: event.AccountDataEventType}, ssssKey)
+	backupKeyBytes, err := ssssMachine.GetDecryptedAccountData(ctx, event.AccountDataMegolmBackupKey, ssssKey)
 	if err != nil {
 		return fmt.Errorf("get megolm backup key from SSSS: %w", err)
 	}
