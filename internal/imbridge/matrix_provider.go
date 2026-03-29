@@ -89,7 +89,7 @@ func (p *MatrixProvider) pollWithCrypto(ctx context.Context, creds *Credentials,
 		return nil, err
 	}
 
-	matrixMsgs, nextBatch, err := cc.SyncAndDecrypt(ctx, creds.BotID, cursor, timeoutSec)
+	matrixMsgs, nextBatch, err := cc.SyncAndDecrypt(ctx, creds.BotID, cursor, timeoutSec, isInitial)
 	if err != nil {
 		return nil, err
 	}

@@ -14,7 +14,10 @@ import (
 	_ "github.com/lib/pq"
 	"go.mau.fi/util/dbutil"
 	"maunium.net/go/mautrix"
+	"maunium.net/go/mautrix/crypto"
+	"maunium.net/go/mautrix/crypto/backup"
 	"maunium.net/go/mautrix/crypto/cryptohelper"
+	"maunium.net/go/mautrix/crypto/ssss"
 	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
 )
@@ -26,8 +29,9 @@ type MatrixCryptoClient struct {
 }
 
 // SyncAndDecrypt performs a Matrix /sync, processes crypto key exchanges,
-// and decrypts any encrypted messages.
-func (cc *MatrixCryptoClient) SyncAndDecrypt(ctx context.Context, selfUserID string, since string, timeoutSec int) ([]MatrixMessage, string, error) {
+// and decrypts any encrypted messages. When initialSync is true, message
+// decryption is skipped (only crypto state and cursor are processed).
+func (cc *MatrixCryptoClient) SyncAndDecrypt(ctx context.Context, selfUserID string, since string, timeoutSec int, initialSync bool) ([]MatrixMessage, string, error) {
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSec+10)*time.Second)
 	defer cancel()
 
@@ -45,6 +49,11 @@ func (cc *MatrixCryptoClient) SyncAndDecrypt(ctx context.Context, selfUserID str
 		if _, joinErr := cc.client.JoinRoomByID(ctx, roomID); joinErr != nil {
 			log.Printf("matrix: failed to join invited room %s: %v", roomID, joinErr)
 		}
+	}
+
+	// On initial sync, skip message processing — only crypto state matters.
+	if initialSync {
+		return nil, resp.NextBatch, nil
 	}
 
 	var messages []MatrixMessage
@@ -228,12 +237,18 @@ func (m *MatrixCryptoManager) GetOrCreate(ctx context.Context, creds *Credential
 		return nil, fmt.Errorf("matrix crypto: init: %w", err)
 	}
 
-	// Self-verify via recovery key if provided.
+	// Self-verify and download key backup via recovery key if provided.
 	if recoveryKey != "" {
-		if err := helper.Machine().VerifyWithRecoveryKey(ctx, recoveryKey); err != nil {
+		mach := helper.Machine()
+		if err := mach.VerifyWithRecoveryKey(ctx, recoveryKey); err != nil {
 			log.Printf("matrix crypto: self-verify failed (continuing anyway): %v", err)
 		} else {
 			log.Printf("matrix crypto: device %s self-verified successfully", client.DeviceID)
+		}
+
+		// Download key backup so we can decrypt historical messages.
+		if err := fetchAndStoreKeyBackup(ctx, client, mach, recoveryKey); err != nil {
+			log.Printf("matrix crypto: key backup download failed (continuing anyway): %v", err)
 		}
 	}
 
@@ -267,6 +282,40 @@ func (m *MatrixCryptoManager) Remove(sandboxID, botID string) {
 	if ok && cc.cryptoHelper != nil {
 		cc.cryptoHelper.Close()
 	}
+}
+
+// fetchAndStoreKeyBackup downloads the key backup from the server using the recovery key.
+// This allows the bot to decrypt historical messages from before its device was created.
+func fetchAndStoreKeyBackup(ctx context.Context, client *mautrix.Client, mach *crypto.OlmMachine, recoveryKey string) error {
+	// Get SSSS key from recovery key.
+	ssssMachine := ssss.NewSSSSMachine(client)
+	keyID, keyData, err := ssssMachine.GetDefaultKeyData(ctx)
+	if err != nil {
+		return fmt.Errorf("get SSSS key data: %w", err)
+	}
+	ssssKey, err := keyData.VerifyRecoveryKey(keyID, recoveryKey)
+	if err != nil {
+		return fmt.Errorf("verify recovery key: %w", err)
+	}
+
+	// Decrypt the megolm backup key from SSSS.
+	backupKeyBytes, err := ssssMachine.GetDecryptedAccountData(ctx, event.Type{Type: string(id.SecretMegolmBackupV1), Class: event.AccountDataEventType}, ssssKey)
+	if err != nil {
+		return fmt.Errorf("get megolm backup key from SSSS: %w", err)
+	}
+
+	megolmBackupKey, err := backup.MegolmBackupKeyFromBytes(backupKeyBytes)
+	if err != nil {
+		return fmt.Errorf("parse megolm backup key: %w", err)
+	}
+
+	// Download and store the key backup.
+	version, err := mach.DownloadAndStoreLatestKeyBackup(ctx, megolmBackupKey)
+	if err != nil {
+		return fmt.Errorf("download key backup: %w", err)
+	}
+	log.Printf("matrix crypto: downloaded key backup version %s", version)
+	return nil
 }
 
 // deriveCryptoDBURL derives the agentserver_matrix database URL from the main database URL.
