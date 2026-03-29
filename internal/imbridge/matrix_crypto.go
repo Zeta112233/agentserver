@@ -150,11 +150,11 @@ func (cc *MatrixCryptoClient) SendTyping(ctx context.Context, roomID string, typ
 
 // MatrixCryptoManager manages long-lived E2EE Matrix clients per binding.
 type MatrixCryptoManager struct {
-	clients  map[string]*MatrixCryptoClient
-	mu       sync.Mutex
-	cryptoDB *sql.DB // shared connection pool to agentserver_matrix
-	encKey   []byte
-	db       BridgeDB // for reading/writing device_id in provider_meta
+	clients     map[string]*MatrixCryptoClient
+	mu          sync.Mutex
+	cryptoDBURL string
+	encKey      []byte
+	db          BridgeDB // for reading/writing device_id in provider_meta
 }
 
 // NewMatrixCryptoManager creates a manager for E2EE Matrix clients.
@@ -163,15 +163,11 @@ type MatrixCryptoManager struct {
 func NewMatrixCryptoManager(mainDBURL string, encKey []byte, db BridgeDB) *MatrixCryptoManager {
 	cryptoDBURL := deriveCryptoDBURL(mainDBURL)
 	ensureCryptoDB(mainDBURL)
-	cryptoDB, err := sql.Open("postgres", cryptoDBURL)
-	if err != nil {
-		log.Printf("matrix crypto: failed to open crypto db: %v", err)
-	}
 	return &MatrixCryptoManager{
-		clients:  make(map[string]*MatrixCryptoClient),
-		cryptoDB: cryptoDB,
-		encKey:   encKey,
-		db:       db,
+		clients:     make(map[string]*MatrixCryptoClient),
+		cryptoDBURL: cryptoDBURL,
+		encKey:      encKey,
+		db:          db,
 	}
 }
 
@@ -205,24 +201,32 @@ func (m *MatrixCryptoManager) GetOrCreate(ctx context.Context, creds *Credential
 		client.DeviceID = resp.DeviceID
 	}
 
-	if m.cryptoDB == nil {
-		return nil, fmt.Errorf("matrix crypto: crypto database not available")
-	}
-
-	// Wrap the shared connection pool for the crypto helper.
-	cryptoDB, err := dbutil.NewWithDB(m.cryptoDB, "postgres")
+	// Each binding gets its own *sql.DB because CryptoHelper.Close()
+	// closes the underlying connection. Limit pool size to avoid
+	// exhausting PostgreSQL's connection limit with many bindings.
+	sqlDB, err := sql.Open("postgres", m.cryptoDBURL)
 	if err != nil {
+		return nil, fmt.Errorf("matrix crypto: open db: %w", err)
+	}
+	sqlDB.SetMaxOpenConns(3)
+	sqlDB.SetMaxIdleConns(1)
+
+	cryptoDB, err := dbutil.NewWithDB(sqlDB, "postgres")
+	if err != nil {
+		sqlDB.Close()
 		return nil, fmt.Errorf("matrix crypto: wrap db: %w", err)
 	}
 
 	// Create crypto helper.
 	helper, err := cryptohelper.NewCryptoHelper(client, m.encKey, cryptoDB)
 	if err != nil {
+		sqlDB.Close()
 		return nil, fmt.Errorf("matrix crypto: new helper: %w", err)
 	}
 	helper.DBAccountID = key
 
 	if err := helper.Init(ctx); err != nil {
+		sqlDB.Close()
 		return nil, fmt.Errorf("matrix crypto: init: %w", err)
 	}
 

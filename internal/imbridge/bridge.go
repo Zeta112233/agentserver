@@ -112,57 +112,36 @@ func (b *Bridge) StartPoller(binding BridgeBinding) {
 }
 
 // StopPoller stops the polling goroutine for a specific binding.
+// This only cancels the goroutine; it does NOT clean up provider resources
+// like E2EE crypto clients. Use CleanupProvider.Cleanup for that.
 func (b *Bridge) StopPoller(sandboxID, provider, botID string) {
 	b.mu.Lock()
+	defer b.mu.Unlock()
+
 	key := pollerKey(sandboxID, provider, botID)
 	if cancel, ok := b.pollers[key]; ok {
 		cancel()
 		delete(b.pollers, key)
 	}
-	b.mu.Unlock()
-
-	// Clean up provider-specific resources (e.g., E2EE crypto sessions).
-	if p, ok := b.providers[provider]; ok {
-		if cp, ok := p.(CleanupProvider); ok {
-			cp.Cleanup(sandboxID, botID)
-		}
-	}
 }
 
 // StopPollersForSandbox stops all polling goroutines and typing sessions for a sandbox.
+// This only cancels goroutines; it does NOT clean up provider resources.
 func (b *Bridge) StopPollersForSandbox(sandboxID string) {
 	b.mu.Lock()
+	defer b.mu.Unlock()
+
 	prefix := sandboxID + ":"
-
-	// Collect provider+botID pairs for cleanup after releasing the lock.
-	type pollerInfo struct{ provider, botID string }
-	var toCleanup []pollerInfo
-
 	for key, cancel := range b.pollers {
 		if strings.HasPrefix(key, prefix) {
 			cancel()
 			delete(b.pollers, key)
-			// Parse "sandboxID:provider:botID".
-			parts := strings.SplitN(key, ":", 3)
-			if len(parts) == 3 {
-				toCleanup = append(toCleanup, pollerInfo{parts[1], parts[2]})
-			}
 		}
 	}
 	for key, cancel := range b.typingSessions {
 		if strings.HasPrefix(key, prefix) {
 			cancel()
 			delete(b.typingSessions, key)
-		}
-	}
-	b.mu.Unlock()
-
-	// Clean up provider-specific resources (e.g., E2EE crypto sessions).
-	for _, info := range toCleanup {
-		if p, ok := b.providers[info.provider]; ok {
-			if cp, ok := p.(CleanupProvider); ok {
-				cp.Cleanup(sandboxID, info.botID)
-			}
 		}
 	}
 }

@@ -2411,9 +2411,14 @@ func (s *Server) handleIMMatrixDisconnect(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	matrixProvider := s.IMBridge.GetProvider("matrix")
 	for _, b := range bindings {
 		if s.IMBridge != nil {
 			s.IMBridge.StopPoller(id, "matrix", b.BotID)
+		}
+		// Clean up E2EE crypto client (closes its DB connection).
+		if mp, ok := matrixProvider.(*imbridge.MatrixProvider); ok {
+			mp.Cleanup(id, b.BotID)
 		}
 		if err := s.DB.DeleteIMBinding(id, "matrix", b.BotID); err != nil {
 			log.Printf("matrix disconnect: delete binding: %v", err)
