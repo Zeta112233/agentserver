@@ -59,6 +59,7 @@ type Server struct {
 	ModelserverOAuthIntrospectURL string
 	ModelserverOAuthRedirectURI   string
 	ModelserverProxyURL           string
+	DatabaseURL                  string // PostgreSQL connection URL (needed for Matrix E2EE crypto DB)
 }
 
 func New(a *auth.Auth, oidcMgr *auth.OIDCManager, database *db.DB, sandboxStore *sbxstore.Store, processManager process.Manager, driveManager storage.DriveManager, nsMgr *namespace.Manager, tunnelReg *tunnel.Registry, staticFS fs.FS, passwordAuthEnabled bool) *Server {
@@ -107,11 +108,28 @@ func New(a *auth.Auth, oidcMgr *auth.OIDCManager, database *db.DB, sandboxStore 
 		&imbridge.TelegramProvider{},
 		&imbridge.MatrixProvider{},
 	})
-	s.restoreIMBridgePollers()
 	if s.OIDC != nil {
 		s.OIDC.OnUserCreated = s.createDefaultWorkspace
 	}
 	return s
+}
+
+// InitMatrixE2EE initializes the Matrix E2EE crypto manager.
+// Must be called after DatabaseURL is set and before RestoreIMBridgePollers.
+func (s *Server) InitMatrixE2EE() {
+	if s.DatabaseURL == "" || s.IMBridge == nil {
+		return
+	}
+	mp, ok := s.IMBridge.GetProvider("matrix").(*imbridge.MatrixProvider)
+	if !ok {
+		return
+	}
+	encKey := []byte(os.Getenv("MATRIX_ENCRYPTION_KEY"))
+	if len(encKey) == 0 {
+		encKey = []byte("agentserver-matrix-default-key-01")
+	}
+	mp.CryptoManager = imbridge.NewMatrixCryptoManager(s.DatabaseURL, encKey, s.DB)
+	log.Println("Matrix E2EE crypto manager initialized")
 }
 
 // createDefaultWorkspace creates a "Default workspace" for a newly registered user.
@@ -1698,11 +1716,11 @@ func generatePassword() string {
 // IM bridge restore (on agentserver restart)
 // ---------------------------------------------------------------------------
 
-// restoreIMBridgePollers restarts long-poll goroutines for all active
+// RestoreIMBridgePollers restarts long-poll goroutines for all active
 // nanoclaw IM bindings. Called once during server startup to recover
 // from agentserver restarts — the cursor is persisted in DB,
 // so pollers resume from where they left off without message loss.
-func (s *Server) restoreIMBridgePollers() {
+func (s *Server) RestoreIMBridgePollers() {
 	if s.IMBridge == nil {
 		return
 	}
@@ -2153,11 +2171,22 @@ func (s *Server) handleNanoclawIMSend(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		case "matrix":
-			// Matrix: upload to content repository → send m.image event
+			// Matrix: upload to content repository → send m.image event (auto-encrypts via crypto client)
 			roomID := strings.TrimSuffix(userID, "@matrix")
-			if err := imbridge.MatrixSendImage(r.Context(), baseURL, botToken, roomID, mediaData, reqMeta.Text); err != nil {
-				log.Printf("nanoclaw im send image: failed sandbox=%s to=%s: %v", sandboxID, userID, err)
-				http.Error(w, "failed to send image: "+err.Error(), http.StatusBadGateway)
+			var sendErr error
+			if mp, ok := provider.(*imbridge.MatrixProvider); ok && mp.CryptoManager != nil {
+				creds := imbridge.Credentials{SandboxID: sandboxID, BotID: botID, BotToken: botToken, BaseURL: baseURL}
+				if cc, err := mp.CryptoManager.GetOrCreate(r.Context(), &creds, ""); err == nil {
+					sendErr = cc.SendImage(r.Context(), roomID, mediaData, reqMeta.Text)
+				} else {
+					sendErr = imbridge.MatrixSendImage(r.Context(), baseURL, botToken, roomID, mediaData, reqMeta.Text)
+				}
+			} else {
+				sendErr = imbridge.MatrixSendImage(r.Context(), baseURL, botToken, roomID, mediaData, reqMeta.Text)
+			}
+			if sendErr != nil {
+				log.Printf("nanoclaw im send image: failed sandbox=%s to=%s: %v", sandboxID, userID, sendErr)
+				http.Error(w, "failed to send image: "+sendErr.Error(), http.StatusBadGateway)
 				return
 			}
 		default:
@@ -2304,6 +2333,7 @@ func (s *Server) handleIMMatrixConfigure(w http.ResponseWriter, r *http.Request)
 	var req struct {
 		HomeserverURL string `json:"homeserver_url"`
 		AccessToken   string `json:"access_token"`
+		RecoveryKey   string `json:"recovery_key"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -2337,9 +2367,18 @@ func (s *Server) handleIMMatrixConfigure(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// Initialize E2EE crypto client and self-verify if recovery key is provided.
+	matrixProvider := s.IMBridge.GetProvider("matrix")
+	if mp, ok := matrixProvider.(*imbridge.MatrixProvider); ok && mp.CryptoManager != nil {
+		creds := imbridge.Credentials{SandboxID: id, BotID: botID, BotToken: req.AccessToken, BaseURL: req.HomeserverURL}
+		if _, err := mp.CryptoManager.GetOrCreate(r.Context(), &creds, req.RecoveryKey); err != nil {
+			log.Printf("matrix configure: crypto init failed (E2EE may not work): %v", err)
+		}
+	}
+
 	if sbx.PodIP != "" && s.IMBridge != nil {
 		s.IMBridge.StartPoller(imbridge.BridgeBinding{
-			Provider:     &imbridge.MatrixProvider{},
+			Provider:     matrixProvider,
 			Credentials:  imbridge.Credentials{SandboxID: id, BotID: botID, BotToken: req.AccessToken, BaseURL: req.HomeserverURL},
 			Cursor:       "",
 			BridgeSecret: sbx.NanoclawBridgeSecret,

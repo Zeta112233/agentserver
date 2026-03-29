@@ -48,6 +48,12 @@ type TypingProvider interface {
 		sendError func(text string))
 }
 
+// CleanupProvider is an optional interface for providers that need cleanup
+// when a poller is stopped (e.g., closing long-lived crypto sessions).
+type CleanupProvider interface {
+	Cleanup(sandboxID, botID string)
+}
+
 // InboundMessage represents a single incoming message from the IM platform.
 type InboundMessage struct {
 	FromUserID string

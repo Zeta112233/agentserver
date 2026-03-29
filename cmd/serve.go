@@ -209,6 +209,9 @@ var serveCmd = &cobra.Command{
 		}
 
 		srv := server.New(authSvc, oidcMgr, database, sandboxStore, procMgr, driveMgr, nsMgr, tunnel.NewRegistry(), staticFS, !strings.EqualFold(os.Getenv("PASSWORD_AUTH_ENABLED"), "false"))
+		srv.DatabaseURL = dbURL
+		srv.InitMatrixE2EE()
+		srv.RestoreIMBridgePollers()
 		srv.LLMProxyURL = os.Getenv("LLMPROXY_URL")
 		srv.ModelserverOAuthClientID = os.Getenv("MODELSERVER_OAUTH_CLIENT_ID")
 		srv.ModelserverOAuthClientSecret = os.Getenv("MODELSERVER_OAUTH_CLIENT_SECRET")

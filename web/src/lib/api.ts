@@ -411,11 +411,11 @@ export async function telegramDisconnect(sandboxId: string): Promise<void> {
   if (!res.ok) throw new Error('Failed to disconnect Telegram')
 }
 
-export async function matrixConfigure(sandboxId: string, homeserverUrl: string, accessToken: string): Promise<MatrixConfigureResult> {
+export async function matrixConfigure(sandboxId: string, homeserverUrl: string, accessToken: string, recoveryKey?: string): Promise<MatrixConfigureResult> {
   const res = await fetch(`/api/sandboxes/${sandboxId}/im/matrix/configure`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ homeserver_url: homeserverUrl, access_token: accessToken }),
+    body: JSON.stringify({ homeserver_url: homeserverUrl, access_token: accessToken, recovery_key: recoveryKey || '' }),
   })
   if (!res.ok) {
     const text = await res.text()

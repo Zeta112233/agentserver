@@ -114,31 +114,55 @@ func (b *Bridge) StartPoller(binding BridgeBinding) {
 // StopPoller stops the polling goroutine for a specific binding.
 func (b *Bridge) StopPoller(sandboxID, provider, botID string) {
 	b.mu.Lock()
-	defer b.mu.Unlock()
-
 	key := pollerKey(sandboxID, provider, botID)
 	if cancel, ok := b.pollers[key]; ok {
 		cancel()
 		delete(b.pollers, key)
+	}
+	b.mu.Unlock()
+
+	// Clean up provider-specific resources (e.g., E2EE crypto sessions).
+	if p, ok := b.providers[provider]; ok {
+		if cp, ok := p.(CleanupProvider); ok {
+			cp.Cleanup(sandboxID, botID)
+		}
 	}
 }
 
 // StopPollersForSandbox stops all polling goroutines and typing sessions for a sandbox.
 func (b *Bridge) StopPollersForSandbox(sandboxID string) {
 	b.mu.Lock()
-	defer b.mu.Unlock()
-
 	prefix := sandboxID + ":"
+
+	// Collect provider+botID pairs for cleanup after releasing the lock.
+	type pollerInfo struct{ provider, botID string }
+	var toCleanup []pollerInfo
+
 	for key, cancel := range b.pollers {
 		if strings.HasPrefix(key, prefix) {
 			cancel()
 			delete(b.pollers, key)
+			// Parse "sandboxID:provider:botID".
+			parts := strings.SplitN(key, ":", 3)
+			if len(parts) == 3 {
+				toCleanup = append(toCleanup, pollerInfo{parts[1], parts[2]})
+			}
 		}
 	}
 	for key, cancel := range b.typingSessions {
 		if strings.HasPrefix(key, prefix) {
 			cancel()
 			delete(b.typingSessions, key)
+		}
+	}
+	b.mu.Unlock()
+
+	// Clean up provider-specific resources (e.g., E2EE crypto sessions).
+	for _, info := range toCleanup {
+		if p, ok := b.providers[info.provider]; ok {
+			if cp, ok := p.(CleanupProvider); ok {
+				cp.Cleanup(sandboxID, info.botID)
+			}
 		}
 	}
 }
@@ -221,7 +245,6 @@ func (b *Bridge) pollLoop(ctx context.Context, binding BridgeBinding) {
 			return
 		}
 
-		log.Printf("imbridge: polling sandbox=%s provider=%s cursor=%q", sandboxID, providerName, cursor)
 		result, err := binding.Provider.Poll(ctx, &binding.Credentials, cursor)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -245,7 +268,6 @@ func (b *Bridge) pollLoop(ctx context.Context, binding BridgeBinding) {
 		}
 
 		consecutiveFailures = 0
-		log.Printf("imbridge: poll ok sandbox=%s provider=%s msgs=%d newCursor=%q", sandboxID, providerName, len(result.Messages), result.NewCursor)
 
 		// Forward messages BEFORE advancing cursor.
 		allForwarded := true

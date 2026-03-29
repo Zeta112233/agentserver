@@ -11,6 +11,7 @@ interface MatrixConfigModalProps {
 export function MatrixConfigModal({ sandboxId, onClose, onConnected }: MatrixConfigModalProps) {
   const [homeserverUrl, setHomeserverUrl] = useState('')
   const [accessToken, setAccessToken] = useState('')
+  const [recoveryKey, setRecoveryKey] = useState('')
   const [status, setStatus] = useState<'idle' | 'loading' | 'connected' | 'error'>('idle')
   const [error, setError] = useState('')
   const [userId, setUserId] = useState('')
@@ -22,7 +23,7 @@ export function MatrixConfigModal({ sandboxId, onClose, onConnected }: MatrixCon
     setStatus('loading')
     setError('')
     try {
-      const result = await matrixConfigure(sandboxId, homeserverUrl.trim(), accessToken.trim())
+      const result = await matrixConfigure(sandboxId, homeserverUrl.trim(), accessToken.trim(), recoveryKey.trim())
       setUserId(result.user_id || result.bot_id)
       setStatus('connected')
       onConnected()
@@ -57,7 +58,7 @@ export function MatrixConfigModal({ sandboxId, onClose, onConnected }: MatrixCon
         ) : (
           <form onSubmit={handleSubmit}>
             <p className="text-xs text-[var(--muted-foreground)] mb-3">
-              Enter your Matrix homeserver URL and bot access token.
+              Enter your Matrix homeserver URL, bot access token, and recovery key for E2EE verification.
             </p>
             <input
               type="url"
@@ -72,7 +73,15 @@ export function MatrixConfigModal({ sandboxId, onClose, onConnected }: MatrixCon
               type="password"
               value={accessToken}
               onChange={(e) => setAccessToken(e.target.value)}
-              placeholder="syt_..."
+              placeholder="Access Token"
+              disabled={status === 'loading'}
+              className="mt-2 w-full rounded-md border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm font-mono text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-1 focus:ring-[var(--primary)] disabled:opacity-50"
+            />
+            <input
+              type="password"
+              value={recoveryKey}
+              onChange={(e) => setRecoveryKey(e.target.value)}
+              placeholder="Recovery Key (EsTX ...)"
               disabled={status === 'loading'}
               className="mt-2 w-full rounded-md border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm font-mono text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-1 focus:ring-[var(--primary)] disabled:opacity-50"
             />
