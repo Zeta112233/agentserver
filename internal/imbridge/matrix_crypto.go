@@ -201,12 +201,10 @@ func (m *MatrixCryptoManager) GetOrCreate(ctx context.Context, creds *Credential
 		return nil, fmt.Errorf("matrix crypto: create client: %w", err)
 	}
 
-	// Get device ID from Whoami (the token is bound to a specific device).
-	resp, err := client.Whoami(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("matrix crypto: whoami: %w", err)
-	}
-	client.DeviceID = resp.DeviceID
+	// Don't pre-set DeviceID — let the CryptoHelper manage device identity.
+	// If the crypto DB has a stored device, it will reuse it.
+	// If not, it will create a new device rather than conflicting with
+	// stale keys from a previous Olm account on the server.
 
 	// Each client gets its own *sql.DB because CryptoHelper.Close()
 	// closes the underlying connection.
@@ -231,6 +229,7 @@ func (m *MatrixCryptoManager) GetOrCreate(ctx context.Context, creds *Credential
 		return nil, fmt.Errorf("matrix crypto: new helper: %w", err)
 	}
 	helper.DBAccountID = key
+	helper.MSC4190 = true // Allow creating a new bot device if needed.
 
 	if err := helper.Init(ctx); err != nil {
 		sqlDB.Close()
