@@ -722,7 +722,7 @@ function SettingsTab({ workspaceId }: { workspaceId: string }) {
                         checked={ch.require_mention}
                         onChange={async (e) => {
                           try {
-                            await updateWorkspaceIMChannel(workspace.id, ch.id, { require_mention: e.target.checked })
+                            await updateWorkspaceIMChannel(workspaceId, ch.id, { require_mention: e.target.checked })
                             loadChannels()
                           } catch {}
                         }}
