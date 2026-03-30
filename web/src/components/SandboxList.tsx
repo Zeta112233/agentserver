@@ -54,7 +54,7 @@ export function SandboxList({
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState<{ id: string; name: string } | null>(null)
   const [confirmPause, setConfirmPause] = useState<{ id: string; name: string } | null>(null)
-  const [agentCodeData, setAgentCodeData] = useState<{ code: string; expires_at: string; command: string } | null>(null)
+  const [agentCodeData, setAgentCodeData] = useState<{ code: string; expires_at: string; opencodeCommand: string; claudecodeCommand: string } | null>(null)
   const [quotaError, setQuotaError] = useState<string | null>(null)
 
   // Poll when any sandbox is in a transitional state.
@@ -170,8 +170,9 @@ export function SandboxList({
               try {
                 const data = await createAgentCode(selectedWorkspaceId)
                 const serverUrl = window.location.origin
-                const command = `agentserver connect --server ${serverUrl} --code ${data.code} --name "My PC"`
-                setAgentCodeData({ ...data, command })
+                const opencodeCommand = `agentserver connect --server ${serverUrl} --code ${data.code} --name "My PC"`
+                const claudecodeCommand = `agentserver claudecode --server ${serverUrl} --code ${data.code} --name "My PC"`
+                setAgentCodeData({ ...data, opencodeCommand, claudecodeCommand })
               } catch {
                 // ignore
               }
@@ -330,7 +331,7 @@ export function SandboxList({
                         <br />
                         Windows / Other:{' '}
                         <a
-                          href="https://github.com/opencode-ai/agentserver/releases"
+                          href="https://github.com/agentserver/agentserver/releases"
                           target="_blank"
                           rel="noopener noreferrer"
                           className="inline-flex items-center gap-0.5 text-[var(--foreground)] underline underline-offset-2 hover:opacity-80"
@@ -342,17 +343,13 @@ export function SandboxList({
                     <p className="flex items-start gap-1.5">
                       <Download size={14} className="mt-0.5 shrink-0" />
                       <span>
-                        <span className="font-medium text-[var(--foreground)]">Install opencode</span>
+                        <span className="font-medium text-[var(--foreground)]">Install your agent backend</span>
                         <br />
-                        Follow the installation guide at{' '}
-                        <a
-                          href="https://opencode.ai"
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-0.5 text-[var(--foreground)] underline underline-offset-2 hover:opacity-80"
-                        >
-                          opencode.ai <ExternalLink size={11} className="inline" />
-                        </a>
+                        OpenCode:{' '}
+                        <a href="https://opencode.ai" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 text-[var(--foreground)] underline underline-offset-2 hover:opacity-80">opencode.ai <ExternalLink size={11} className="inline" /></a>
+                        {' · '}
+                        Claude Code:{' '}
+                        <code className="rounded bg-[var(--secondary)] px-1.5 py-0.5 text-xs text-[var(--foreground)]">npm i -g @anthropic-ai/claude-code</code>
                       </span>
                     </p>
                   </div>
@@ -370,18 +367,37 @@ export function SandboxList({
                 <div className="pb-5">
                   <p className="text-sm font-semibold text-[var(--foreground)]">Run Command</p>
                   <p className="mt-1.5 text-sm text-[var(--muted-foreground)]">
-                    Run this on your local machine to connect:
+                    Pick one and run on your local machine:
                   </p>
-                  <div className="relative mt-2 rounded-md bg-[var(--secondary)] p-3">
-                    <code className="block whitespace-pre-wrap break-all text-xs text-[var(--foreground)]">
-                      {agentCodeData.command}
-                    </code>
-                    <button
-                      onClick={() => navigator.clipboard.writeText(agentCodeData.command)}
-                      className="absolute right-2 top-2 rounded px-2 py-1 text-xs text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
-                    >
-                      Copy
-                    </button>
+                  <div className="mt-2 flex flex-col gap-2">
+                    <div>
+                      <p className="text-xs font-medium text-[var(--muted-foreground)] mb-1">OpenCode (Web IDE)</p>
+                      <div className="relative rounded-md bg-[var(--secondary)] p-3">
+                        <code className="block whitespace-pre-wrap break-all text-xs text-[var(--foreground)]">
+                          {agentCodeData.opencodeCommand}
+                        </code>
+                        <button
+                          onClick={() => navigator.clipboard.writeText(agentCodeData.opencodeCommand)}
+                          className="absolute right-2 top-2 rounded px-2 py-1 text-xs text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
+                        >
+                          Copy
+                        </button>
+                      </div>
+                    </div>
+                    <div>
+                      <p className="text-xs font-medium text-[var(--muted-foreground)] mb-1">Claude Code (Terminal)</p>
+                      <div className="relative rounded-md bg-[var(--secondary)] p-3">
+                        <code className="block whitespace-pre-wrap break-all text-xs text-[var(--foreground)]">
+                          {agentCodeData.claudecodeCommand}
+                        </code>
+                        <button
+                          onClick={() => navigator.clipboard.writeText(agentCodeData.claudecodeCommand)}
+                          className="absolute right-2 top-2 rounded px-2 py-1 text-xs text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
+                        >
+                          Copy
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
