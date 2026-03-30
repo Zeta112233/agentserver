@@ -1,6 +1,7 @@
 package tunnel
 
 import (
+	"io"
 	"net"
 	"time"
 
@@ -16,7 +17,7 @@ func MuxConfig() *yamux.Config {
 	// while the accept loop is busy.
 	cfg.AcceptBacklog = 256
 	// Silence yamux's internal logger (we handle errors at the caller).
-	cfg.LogOutput = nil
+	cfg.LogOutput = io.Discard
 	return cfg
 }
 

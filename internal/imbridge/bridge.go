@@ -42,11 +42,10 @@ type ExecCommander interface {
 // BridgeBinding holds the info needed to run a poller for one IM channel.
 // The sandbox to forward messages to is resolved dynamically from the channel ID.
 type BridgeBinding struct {
-	Provider       Provider
-	Credentials    Credentials
-	ChannelID      string // workspace_im_channels.id
-	Cursor         string
-	RequireMention bool
+	Provider    Provider
+	Credentials Credentials
+	ChannelID   string // workspace_im_channels.id
+	Cursor      string
 }
 
 // Bridge manages per-binding poll goroutines for all IM providers.
@@ -57,6 +56,7 @@ type Bridge struct {
 	providers        map[string]Provider
 	pollers          map[string]context.CancelFunc // key: channelID
 	registeredGroups map[string]string             // key: "sandboxID:chatJID" → cached settings hash
+	channelMention   map[string]bool               // key: channelID → require_mention setting
 	typingSessions   map[string]func()             // key: "channelID:userID" → cancel func
 	mu               sync.Mutex
 }
@@ -74,6 +74,7 @@ func NewBridge(db BridgeDB, resolver SandboxResolver, exec ExecCommander, provid
 		providers:        pm,
 		pollers:          make(map[string]context.CancelFunc),
 		registeredGroups: make(map[string]string),
+		channelMention:   make(map[string]bool),
 		typingSessions:   make(map[string]func()),
 	}
 }
@@ -182,6 +183,21 @@ func (b *Bridge) startTypingForUser(binding BridgeBinding, msg InboundMessage) {
 	tp.StartTyping(ctx, &binding.Credentials, msg.FromUserID, msg.Metadata, sendError)
 }
 
+// SetChannelRequireMention updates the in-memory require_mention setting for a channel.
+func (b *Bridge) SetChannelRequireMention(channelID string, requireMention bool) {
+	b.mu.Lock()
+	b.channelMention[channelID] = requireMention
+	b.mu.Unlock()
+}
+
+// getChannelRequireMention reads the in-memory require_mention setting.
+func (b *Bridge) getChannelRequireMention(channelID string) bool {
+	b.mu.Lock()
+	v := b.channelMention[channelID]
+	b.mu.Unlock()
+	return v
+}
+
 // StopTyping stops the typing indicator for a user in a channel.
 func (b *Bridge) StopTyping(channelID, userID string) {
 	key := typingKey(channelID, userID)
@@ -284,7 +300,7 @@ func (b *Bridge) forwardToNanoClaw(ctx context.Context, binding BridgeBinding, m
 	}
 
 	// Skip messages in group chats that don't mention the bot (when require_mention is enabled).
-	if binding.RequireMention && msg.IsGroup && msg.Metadata["mentioned"] != "true" {
+	if b.getChannelRequireMention(binding.ChannelID) && msg.IsGroup && msg.Metadata["mentioned"] != "true" {
 		return false, nil // not mentioned — skip silently, advance cursor
 	}
 

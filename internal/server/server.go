@@ -1753,6 +1753,7 @@ func (s *Server) RestoreIMBridgePollers() {
 			continue
 		}
 		for _, ch := range channels {
+			s.IMBridge.SetChannelRequireMention(ch.ID, ch.RequireMention)
 			s.IMBridge.StartPoller(imbridge.BridgeBinding{
 				Provider: provider,
 				Credentials: imbridge.Credentials{
@@ -1761,9 +1762,8 @@ func (s *Server) RestoreIMBridgePollers() {
 					BotToken:  ch.BotToken,
 					BaseURL:   ch.BaseURL,
 				},
-				ChannelID:      ch.ID,
-				Cursor:         ch.Cursor,
-				RequireMention: ch.RequireMention,
+				ChannelID: ch.ID,
+				Cursor:    ch.Cursor,
 			})
 			restored++
 		}
@@ -1796,9 +1796,8 @@ func (s *Server) restoreIMBridgePollersForSandbox(sandboxID string) {
 			BotToken:  ch.BotToken,
 			BaseURL:   ch.BaseURL,
 		},
-		ChannelID:      ch.ID,
-		Cursor:         ch.Cursor,
-		RequireMention: ch.RequireMention,
+		ChannelID: ch.ID,
+		Cursor:    ch.Cursor,
 	})
 }
 
@@ -2578,6 +2577,9 @@ func (s *Server) handleUpdateWorkspaceIMChannel(w http.ResponseWriter, r *http.R
 		if err := s.DB.UpdateIMChannelSettings(channelID, *req.RequireMention); err != nil {
 			http.Error(w, "failed to update channel", http.StatusInternalServerError)
 			return
+		}
+		if s.IMBridge != nil {
+			s.IMBridge.SetChannelRequireMention(channelID, *req.RequireMention)
 		}
 	}
 
