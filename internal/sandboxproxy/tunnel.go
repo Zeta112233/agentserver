@@ -71,8 +71,10 @@ func (s *Server) handleTunnel(w http.ResponseWriter, r *http.Request) {
 	s.Sandboxes.UpdateStatus(sandboxID, sbxstore.StatusRunning)
 	s.DB.UpdateSandboxHeartbeat(sandboxID)
 
-	// Start heartbeat ticker (for DB heartbeat updates).
-	// yamux handles its own keep-alive at the transport level.
+	// Heartbeat ticker: update DB heartbeat and send a WebSocket-level
+	// ping to keep the connection alive through reverse proxies.
+	// yamux keepalive is disabled — the agent sends control streams
+	// every 20s for upstream traffic; this ping provides downstream traffic.
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 
@@ -87,6 +89,15 @@ func (s *Server) handleTunnel(w http.ResponseWriter, r *http.Request) {
 				return
 			case <-ticker.C:
 				s.DB.UpdateSandboxHeartbeat(sandboxID)
+				// WebSocket-level ping (handled by nhooyr/websocket automatically).
+				pingCtx, pingCancel := context.WithTimeout(ctx, 5*time.Second)
+				if err := ws.Ping(pingCtx); err != nil {
+					pingCancel()
+					log.Printf("tunnel %s: ping failed: %v", sandboxID, err)
+					cancel()
+					return
+				}
+				pingCancel()
 			}
 		}
 	}()

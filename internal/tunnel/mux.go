@@ -8,15 +8,18 @@ import (
 	"github.com/hashicorp/yamux"
 )
 
-// MuxConfig returns the default yamux configuration for the tunnel.
+// MuxConfig returns the yamux configuration for the tunnel.
 func MuxConfig() *yamux.Config {
 	cfg := yamux.DefaultConfig()
-	cfg.KeepAliveInterval = 20 * time.Second
+	// Disable yamux's built-in keepalive — we do our own heartbeat via
+	// periodic agent-info control streams, which serve double duty as
+	// keepalive traffic and metadata refresh.
+	cfg.EnableKeepAlive = false
 	cfg.ConnectionWriteTimeout = 10 * time.Second
-	// Accept a reasonable backlog of streams so HTTP requests don't stall
-	// while the accept loop is busy.
 	cfg.AcceptBacklog = 256
-	// Silence yamux's internal logger (we handle errors at the caller).
+	// Increase the stream window so large HTTP responses (opencode UI
+	// bundles, SSE streams) don't hit "recv window exceeded".
+	cfg.MaxStreamWindowSize = 4 * 1024 * 1024 // 4 MB
 	cfg.LogOutput = io.Discard
 	return cfg
 }
