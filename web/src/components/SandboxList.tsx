@@ -48,7 +48,7 @@ export function SandboxList({
 }: SandboxListProps) {
   const navigate = useNavigate()
   const location = useLocation()
-  const sandboxMatch = location.pathname.match(/^\/sandboxes\/(.+)$/)
+  const sandboxMatch = location.pathname.match(/\/sandboxes\/(.+)$/)
   const activeSandboxId = sandboxMatch?.[1] ?? null
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const [showCreateModal, setShowCreateModal] = useState(false)
@@ -91,11 +91,11 @@ export function SandboxList({
     setCreating(true)
     setShowCreateModal(false)
     setQuotaError(null)
-    navigate('/')
+    navigate(selectedWorkspaceId ? `/w/${selectedWorkspaceId}` : '/')
     try {
       const sbx = await createSandbox(selectedWorkspaceId, name, type, cpu, memory, idleTimeout)
       setSandboxes((prev) => [...prev, sbx])
-      navigate(`/sandboxes/${sbx.id}`)
+      navigate(`/w/${selectedWorkspaceId}/sandboxes/${sbx.id}`)
     } catch (err: unknown) {
       const qe = err as { error?: string; message?: string } | undefined
       if ((qe?.error === 'quota_exceeded' || qe?.error === 'resource_budget_exceeded') && qe.message) {
@@ -118,7 +118,7 @@ export function SandboxList({
       await deleteSandbox(id)
       setSandboxes((prev) => prev.filter((s) => s.id !== id))
       if (activeSandboxId === id) {
-        navigate('/')
+        navigate(selectedWorkspaceId ? `/w/${selectedWorkspaceId}` : '/')
       }
     } catch {
       // ignore

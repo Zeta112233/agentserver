@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Routes, Route, useNavigate, useParams, Navigate } from 'react-router-dom'
+import { Routes, Route, useNavigate, useParams, useLocation, Navigate } from 'react-router-dom'
 import { Loader2 } from 'lucide-react'
 import {
   checkAuth,
@@ -40,8 +40,8 @@ function SandboxDetailRoute({
   onDelete: (id: string) => void
   onRename?: (id: string, name: string) => void
 }) {
-  const { id } = useParams<{ id: string }>()
-  const sandbox = sandboxes.find((s) => s.id === id)
+  const { sandboxId } = useParams<{ sandboxId: string }>()
+  const sandbox = sandboxes.find((s) => s.id === sandboxId)
   if (!sandbox) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -62,6 +62,7 @@ function SandboxDetailRoute({
 
 export default function App() {
   const navigate = useNavigate()
+  const location = useLocation()
   const [authed, setAuthed] = useState<boolean | null>(null)
   const [user, setUser] = useState<UserInfo | null>(null)
   const [workspaces, setWorkspaces] = useState<Workspace[]>([])
@@ -85,12 +86,28 @@ export default function App() {
       if (ok) {
         listWorkspaces().then((ws) => {
           setWorkspaces(ws)
-          if (ws.length > 0) setSelectedWorkspaceId(ws[0].id)
+          // Use workspace ID from URL if valid, otherwise default to first
+          const match = window.location.pathname.match(/^\/w\/([^/]+)/)
+          const urlWsId = match?.[1]
+          if (urlWsId && ws.some(w => w.id === urlWsId)) {
+            setSelectedWorkspaceId(urlWsId)
+          } else if (ws.length > 0) {
+            setSelectedWorkspaceId(ws[0].id)
+          }
         }).catch(() => {})
         getMe().then(setUser).catch(() => {})
       }
     })
   }, [])
+
+  // Sync selectedWorkspaceId from URL on back/forward navigation
+  useEffect(() => {
+    const match = location.pathname.match(/^\/w\/([^/]+)/)
+    const urlWsId = match?.[1]
+    if (urlWsId && urlWsId !== selectedWorkspaceId && workspaces.some(w => w.id === urlWsId)) {
+      setSelectedWorkspaceId(urlWsId)
+    }
+  }, [location.pathname, workspaces])
 
   useEffect(() => {
     if (selectedWorkspaceId) {
@@ -102,7 +119,7 @@ export default function App() {
 
   const handleSelectWorkspace = useCallback((id: string) => {
     setSelectedWorkspaceId(id || null)
-    navigate('/')
+    navigate(id ? `/w/${id}` : '/')
   }, [navigate])
 
   const handleLogout = useCallback(() => {
@@ -132,9 +149,9 @@ export default function App() {
     try {
       await deleteSandbox(id)
       setSandboxes((prev) => prev.filter((s) => s.id !== id))
-      navigate('/')
+      navigate(selectedWorkspaceId ? `/w/${selectedWorkspaceId}` : '/')
     } catch { /* ignore */ }
-  }, [navigate])
+  }, [navigate, selectedWorkspaceId])
 
   const handleRenameWorkspace = useCallback((id: string, name: string) => {
     setWorkspaces((prev) => prev.map((w) => (w.id === id ? { ...w, name } : w)))
@@ -211,9 +228,9 @@ export default function App() {
         onShowManageWorkspaces={() => navigate('/workspaces')}
       />
       <Routes>
-        <Route path="/" element={sandboxLayout(defaultContent)} />
+        <Route path="/w/:workspaceId" element={sandboxLayout(defaultContent)} />
         <Route
-          path="/sandboxes/:id"
+          path="/w/:workspaceId/sandboxes/:sandboxId"
           element={sandboxLayout(
             <SandboxDetailRoute
               sandboxes={sandboxes}
@@ -239,7 +256,7 @@ export default function App() {
           path="/admin/*"
           element={<AdminPanel />}
         />
-        <Route path="*" element={<Navigate to="/" replace />} />
+        <Route path="*" element={selectedWorkspaceId ? <Navigate to={`/w/${selectedWorkspaceId}`} replace /> : null} />
       </Routes>
     </div>
   )
