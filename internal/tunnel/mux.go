@@ -17,9 +17,6 @@ func MuxConfig() *yamux.Config {
 	cfg.EnableKeepAlive = false
 	cfg.ConnectionWriteTimeout = 10 * time.Second
 	cfg.AcceptBacklog = 256
-	// Increase the stream window so large HTTP responses (opencode UI
-	// bundles, SSE streams) don't hit "recv window exceeded".
-	cfg.MaxStreamWindowSize = 4 * 1024 * 1024 // 4 MB
 	cfg.LogOutput = io.Discard
 	return cfg
 }
