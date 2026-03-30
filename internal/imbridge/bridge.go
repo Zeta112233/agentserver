@@ -27,7 +27,6 @@ type BridgeDB interface {
 	GetChannelMeta(channelID, userID, key string) (string, error)
 	GetAllChannelMeta(channelID, userID string) (map[string]string, error)
 	GetSandboxForChannel(channelID string) (sandboxID, podIP, bridgeSecret string, err error)
-	GetChannelRequireMention(channelID string) (bool, error)
 }
 
 // SandboxResolver looks up the current state of a sandbox.
@@ -43,10 +42,11 @@ type ExecCommander interface {
 // BridgeBinding holds the info needed to run a poller for one IM channel.
 // The sandbox to forward messages to is resolved dynamically from the channel ID.
 type BridgeBinding struct {
-	Provider    Provider
-	Credentials Credentials
-	ChannelID   string // workspace_im_channels.id
-	Cursor      string
+	Provider       Provider
+	Credentials    Credentials
+	ChannelID      string // workspace_im_channels.id
+	Cursor         string
+	RequireMention bool
 }
 
 // Bridge manages per-binding poll goroutines for all IM providers.
@@ -283,8 +283,7 @@ func (b *Bridge) forwardToNanoClaw(ctx context.Context, binding BridgeBinding, m
 	}
 
 	// Skip messages in group chats that don't mention the bot (when require_mention is enabled).
-	requireMention, _ := b.db.GetChannelRequireMention(binding.ChannelID)
-	if requireMention && msg.IsGroup && msg.Metadata["mentioned"] != "true" {
+	if binding.RequireMention && msg.IsGroup && msg.Metadata["mentioned"] != "true" {
 		return nil // not mentioned — skip silently, advance cursor
 	}
 

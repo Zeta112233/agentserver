@@ -99,6 +99,19 @@ func (cc *MatrixCryptoClient) SyncAndDecrypt(ctx context.Context, selfUserID str
 
 	var messages []MatrixMessage
 	for roomID, joinedRoom := range resp.Rooms.Join {
+		// Detect DM rooms (exactly 2 members) via state store.
+		isDM := false
+		if cc.client.StateStore != nil {
+			type memberLister interface {
+				GetRoomJoinedOrInvitedMembers(ctx context.Context, roomID id.RoomID) ([]id.UserID, error)
+			}
+			if ml, ok := cc.client.StateStore.(memberLister); ok {
+				if members, err := ml.GetRoomJoinedOrInvitedMembers(ctx, id.RoomID(roomID)); err == nil {
+					isDM = len(members) <= 2
+				}
+			}
+		}
+
 		for _, evt := range joinedRoom.Timeline.Events {
 			evt.RoomID = id.RoomID(roomID)
 
@@ -144,9 +157,12 @@ func (cc *MatrixCryptoClient) SyncAndDecrypt(ctx context.Context, selfUserID str
 				continue
 			}
 
-			// Check if the bot was @-mentioned via m.mentions.
-			mentioned := msgContent.Mentions != nil && msgContent.Mentions.Has(id.UserID(selfUserID))
-			// Also check body for display name mention (fallback for clients that don't send m.mentions).
+			// Check if the bot was @-mentioned via m.mentions or body text.
+			// DMs are always considered "mentioned" (the user is talking directly to the bot).
+			mentioned := isDM
+			if !mentioned && msgContent.Mentions != nil && msgContent.Mentions.Has(id.UserID(selfUserID)) {
+				mentioned = true
+			}
 			if !mentioned && strings.Contains(msgContent.Body, string(cc.client.UserID)) {
 				mentioned = true
 			}
@@ -158,6 +174,7 @@ func (cc *MatrixCryptoClient) SyncAndDecrypt(ctx context.Context, selfUserID str
 				Text:      msgContent.Body,
 				Timestamp: evt.Timestamp,
 				Mentioned: mentioned,
+				IsDM:      isDM,
 			}
 
 			// Download media for image/file/video/audio messages.

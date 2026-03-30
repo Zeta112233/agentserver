@@ -1761,8 +1761,9 @@ func (s *Server) RestoreIMBridgePollers() {
 					BotToken:  ch.BotToken,
 					BaseURL:   ch.BaseURL,
 				},
-				ChannelID: ch.ID,
-				Cursor:    ch.Cursor,
+				ChannelID:      ch.ID,
+				Cursor:         ch.Cursor,
+				RequireMention: ch.RequireMention,
 			})
 			restored++
 		}
@@ -1795,8 +1796,9 @@ func (s *Server) restoreIMBridgePollersForSandbox(sandboxID string) {
 			BotToken:  ch.BotToken,
 			BaseURL:   ch.BaseURL,
 		},
-		ChannelID: ch.ID,
-		Cursor:    ch.Cursor,
+		ChannelID:      ch.ID,
+		Cursor:         ch.Cursor,
+		RequireMention: ch.RequireMention,
 	})
 }
 

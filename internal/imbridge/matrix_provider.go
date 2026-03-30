@@ -115,7 +115,7 @@ func matrixMsgsToInbound(matrixMsgs []MatrixMessage) []InboundMessage {
 			FromUserID:    m.RoomID + "@matrix",
 			SenderName:    m.SenderID,
 			Text:          m.Text,
-			IsGroup:       true,
+			IsGroup:       !m.IsDM,
 			MediaData:     m.MediaData,
 			MediaType:     m.MediaType,
 			MediaFilename: m.MediaFilename,

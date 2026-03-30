@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"maunium.net/go/mautrix"
@@ -19,7 +20,8 @@ type MatrixMessage struct {
 	SenderID      string
 	Text          string
 	Timestamp     int64
-	Mentioned     bool   // true if the bot was @-mentioned in this message
+	Mentioned     bool // true if the bot was @-mentioned
+	IsDM          bool // true if the room has only 2 members (direct message)
 	MediaData     []byte
 	MediaType     string
 	MediaFilename string
@@ -97,12 +99,20 @@ func MatrixSync(ctx context.Context, homeserverURL, accessToken, selfUserID, sin
 				continue
 			}
 
+			mentioned := false
+			if msgContent.Mentions != nil && msgContent.Mentions.Has(id.UserID(selfUserID)) {
+				mentioned = true
+			} else if strings.Contains(msgContent.Body, selfUserID) {
+				mentioned = true
+			}
+
 			messages = append(messages, MatrixMessage{
 				RoomID:    string(roomID),
 				EventID:   string(evt.ID),
 				SenderID:  string(evt.Sender),
 				Text:      msgContent.Body,
 				Timestamp: evt.Timestamp,
+				Mentioned: mentioned,
 			})
 		}
 	}
