@@ -272,8 +272,6 @@ func (b *Bridge) pollLoop(ctx context.Context, binding BridgeBinding) {
 }
 
 // forwardToNanoClaw sends a message to the NanoClaw pod's bridge HTTP endpoint.
-// The target sandbox is resolved dynamically from the channel binding.
-// forwardToNanoClaw sends a message to the NanoClaw pod's bridge HTTP endpoint.
 // Returns (true, nil) if forwarded, (false, nil) if skipped (e.g. not mentioned), or (false, err) on failure.
 func (b *Bridge) forwardToNanoClaw(ctx context.Context, binding BridgeBinding, msg InboundMessage) (bool, error) {
 	// Resolve which sandbox is bound to this channel.
