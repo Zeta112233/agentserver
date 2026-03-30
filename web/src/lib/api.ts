@@ -48,6 +48,7 @@ export interface Sandbox {
   status: SandboxStatus
   opencode_url?: string
   openclaw_url?: string
+  claudecode_url?: string
   created_at: string
   last_activity_at: string | null
   paused_at: string | null

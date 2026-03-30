@@ -181,7 +181,8 @@ export function SandboxDetail({ sandbox, onPause, onResume, onDelete, onRename }
   const isTransitional = sandbox.status === 'pausing' || sandbox.status === 'resuming' || sandbox.status === 'creating'
   const isOpenClaw = sandbox.type === 'openclaw'
   const isNanoClaw = sandbox.type === 'nanoclaw'
-  const sandboxUrl = isOpenClaw ? sandbox.openclaw_url : isNanoClaw ? null : sandbox.opencode_url
+  const isClaudeCode = sandbox.type === 'claudecode'
+  const sandboxUrl = isOpenClaw ? sandbox.openclaw_url : isClaudeCode ? sandbox.claudecode_url : isNanoClaw ? null : sandbox.opencode_url
 
   const totalRequests = usageData ? usageData.reduce((s, u) => s + u.request_count, 0) : 0
   const totalInput = usageData ? usageData.reduce((s, u) => s + u.input_tokens, 0) : 0
@@ -430,8 +431,9 @@ function OverviewTab({ sandbox, imBindings, usageData, totals, workspaceChannels
   const isRunning = sandbox.status === 'running'
   const isOpenClaw = sandbox.type === 'openclaw'
   const isNanoClaw = sandbox.type === 'nanoclaw'
-  const sandboxUrl = isOpenClaw ? sandbox.openclaw_url : isNanoClaw ? null : sandbox.opencode_url
-  const fallbackLabel = isOpenClaw ? 'OpenClaw' : 'OpenCode'
+  const isClaudeCode = sandbox.type === 'claudecode'
+  const sandboxUrl = isOpenClaw ? sandbox.openclaw_url : isClaudeCode ? sandbox.claudecode_url : isNanoClaw ? null : sandbox.opencode_url
+  const fallbackLabel = isOpenClaw ? 'OpenClaw' : isClaudeCode ? 'Claude Code' : 'OpenCode'
 
   return (
     <div className="flex flex-col gap-6 max-w-3xl">
