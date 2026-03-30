@@ -282,8 +282,13 @@ func (b *Bridge) forwardToNanoClaw(ctx context.Context, binding BridgeBinding, m
 		return fmt.Errorf("sandbox %s has no PodIP (pod may be down or paused)", sandboxID)
 	}
 
+	// Skip messages in group chats that don't mention the bot (when require_mention is enabled).
 	requireMention, _ := b.db.GetChannelRequireMention(binding.ChannelID)
-	b.ensureGroupRegistered(ctx, sandboxID, msg.FromUserID, requireMention)
+	if requireMention && msg.IsGroup && msg.Metadata["mentioned"] != "true" {
+		return nil // not mentioned — skip silently, advance cursor
+	}
+
+	b.ensureGroupRegistered(ctx, sandboxID, msg.FromUserID)
 
 	if err := b.ensureChatRegistered(ctx, podIP, bridgeSecret, msg.FromUserID, msg.SenderName, binding.Provider.Name(), msg.IsGroup); err != nil {
 		log.Printf("imbridge: failed to register chat %s: %v (continuing anyway)", msg.FromUserID, err)
@@ -369,14 +374,14 @@ func (b *Bridge) ensureChatRegistered(ctx context.Context, podIP, bridgeSecret, 
 
 // ensureGroupRegistered registers a chat JID as a NanoClaw group via IPC.
 // Re-registers if the settings (e.g. requireMention) have changed.
-func (b *Bridge) ensureGroupRegistered(ctx context.Context, sandboxID, chatJID string, requireMention bool) {
+func (b *Bridge) ensureGroupRegistered(ctx context.Context, sandboxID, chatJID string) {
 	if b.exec == nil {
 		return
 	}
 
 	// Cache includes settings so changes trigger re-registration.
 	key := sandboxID + ":" + chatJID
-	settingsHash := fmt.Sprintf("mention=%t", requireMention)
+	settingsHash := "v1"
 	b.mu.Lock()
 	if b.registeredGroups[key] == settingsHash {
 		b.mu.Unlock()
@@ -394,7 +399,7 @@ func (b *Bridge) ensureGroupRegistered(ctx context.Context, sandboxID, chatJID s
 		"name":            chatJID,
 		"folder":          folderName,
 		"trigger":         "Andy",
-		"requiresTrigger": requireMention,
+		"requiresTrigger": false,
 	})
 	b64 := base64.StdEncoding.EncodeToString(ipcData)
 

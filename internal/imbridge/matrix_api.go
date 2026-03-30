@@ -19,6 +19,7 @@ type MatrixMessage struct {
 	SenderID      string
 	Text          string
 	Timestamp     int64
+	Mentioned     bool   // true if the bot was @-mentioned in this message
 	MediaData     []byte
 	MediaType     string
 	MediaFilename string

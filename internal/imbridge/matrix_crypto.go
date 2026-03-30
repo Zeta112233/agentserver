@@ -144,12 +144,20 @@ func (cc *MatrixCryptoClient) SyncAndDecrypt(ctx context.Context, selfUserID str
 				continue
 			}
 
+			// Check if the bot was @-mentioned via m.mentions.
+			mentioned := msgContent.Mentions != nil && msgContent.Mentions.Has(id.UserID(selfUserID))
+			// Also check body for display name mention (fallback for clients that don't send m.mentions).
+			if !mentioned && strings.Contains(msgContent.Body, string(cc.client.UserID)) {
+				mentioned = true
+			}
+
 			msg := MatrixMessage{
 				RoomID:    string(roomID),
 				EventID:   string(evt.ID),
 				SenderID:  string(evt.Sender),
 				Text:      msgContent.Body,
 				Timestamp: evt.Timestamp,
+				Mentioned: mentioned,
 			}
 
 			// Download media for image/file/video/audio messages.

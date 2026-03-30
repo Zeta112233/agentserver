@@ -104,6 +104,13 @@ func (p *MatrixProvider) pollWithCrypto(ctx context.Context, creds *Credentials,
 func matrixMsgsToInbound(matrixMsgs []MatrixMessage) []InboundMessage {
 	var msgs []InboundMessage
 	for _, m := range matrixMsgs {
+		meta := map[string]string{
+			"room_id":  m.RoomID,
+			"event_id": m.EventID,
+		}
+		if m.Mentioned {
+			meta["mentioned"] = "true"
+		}
 		msgs = append(msgs, InboundMessage{
 			FromUserID:    m.RoomID + "@matrix",
 			SenderName:    m.SenderID,
@@ -112,10 +119,7 @@ func matrixMsgsToInbound(matrixMsgs []MatrixMessage) []InboundMessage {
 			MediaData:     m.MediaData,
 			MediaType:     m.MediaType,
 			MediaFilename: m.MediaFilename,
-			Metadata: map[string]string{
-				"room_id":  m.RoomID,
-				"event_id": m.EventID,
-			},
+			Metadata:      meta,
 		})
 	}
 	return msgs
