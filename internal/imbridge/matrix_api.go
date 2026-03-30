@@ -1,6 +1,7 @@
 package imbridge
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log"
@@ -8,10 +9,20 @@ import (
 	"strings"
 	"time"
 
+	"github.com/yuin/goldmark"
 	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
 )
+
+// renderMarkdown converts Markdown text to HTML for use in formatted_body.
+func renderMarkdown(text string) string {
+	var buf bytes.Buffer
+	if err := goldmark.Convert([]byte(text), &buf); err != nil {
+		return ""
+	}
+	return buf.String()
+}
 
 // MatrixMessage represents a message received from a Matrix room.
 type MatrixMessage struct {
@@ -131,8 +142,10 @@ func MatrixSendText(ctx context.Context, homeserverURL, accessToken, roomID, tex
 	}
 
 	content := &event.MessageEventContent{
-		MsgType: event.MsgText,
-		Body:    text,
+		MsgType:       event.MsgText,
+		Body:          text,
+		Format:        event.FormatHTML,
+		FormattedBody: renderMarkdown(text),
 	}
 
 	_, err = client.SendMessageEvent(ctx, id.RoomID(roomID), event.EventMessage, content)

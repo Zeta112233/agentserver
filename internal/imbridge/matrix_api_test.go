@@ -67,6 +67,12 @@ func TestMatrixSendText(t *testing.T) {
 		if content["body"] != "Hello, Matrix!" {
 			t.Errorf("expected body 'Hello, Matrix!', got %v", content["body"])
 		}
+		if content["format"] != "org.matrix.custom.html" {
+			t.Errorf("expected format org.matrix.custom.html, got %v", content["format"])
+		}
+		if content["formatted_body"] == nil || content["formatted_body"] == "" {
+			t.Error("expected formatted_body to be set")
+		}
 
 		called = true
 		w.Header().Set("Content-Type", "application/json")

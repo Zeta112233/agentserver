@@ -203,8 +203,10 @@ func (cc *MatrixCryptoClient) SendText(ctx context.Context, roomID, text string)
 	defer cancel()
 
 	content := &event.MessageEventContent{
-		MsgType: event.MsgText,
-		Body:    text,
+		MsgType:       event.MsgText,
+		Body:          text,
+		Format:        event.FormatHTML,
+		FormattedBody: renderMarkdown(text),
 	}
 	_, err := cc.client.SendMessageEvent(ctx, id.RoomID(roomID), event.EventMessage, content)
 	if err != nil {
