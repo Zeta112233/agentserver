@@ -159,8 +159,10 @@ spec:
               value: {{ .Values.sandbox.nanoclaw.bridgeBaseUrl | quote }}
             {{- else if .Values.sandbox.nanoclaw.image }}
             - name: NANOCLAW_BRIDGE_BASE_URL
-              value: {{ printf "http://%s.%s.svc:%v" .Release.Name .Release.Namespace (int .Values.service.port) | quote }}
+              value: {{ printf "http://%s-imbridge.%s.svc:%v" .Release.Name .Release.Namespace (int .Values.imbridge.port) | quote }}
             {{- end }}
+            - name: IMBRIDGE_URL
+              value: {{ printf "http://%s-imbridge.%s.svc:%v" .Release.Name .Release.Namespace (int .Values.imbridge.port) | quote }}
             - name: OPENCODE_SUBDOMAIN_PREFIX
               value: {{ .Values.sandbox.opencode.subdomainPrefix | default "code" | quote }}
             - name: OPENCLAW_SUBDOMAIN_PREFIX

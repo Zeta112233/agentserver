@@ -149,6 +149,13 @@ llmproxy:
   # Default max requests per day per workspace (0 = unlimited).
   defaultMaxRpd: 0
 
+imbridge:
+  image:
+    repository: ghcr.io/agentserver/imbridge
+    tag: latest
+    pullPolicy: Always
+  port: 8083
+
 sandboxProxy:
   image:
     repository: ghcr.io/agentserver/sandboxproxy
