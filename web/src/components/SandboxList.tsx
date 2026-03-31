@@ -210,7 +210,7 @@ export function SandboxList({
         {sandboxes.map((sbx) => (
           <div key={sbx.id}>
             <div
-              onClick={() => navigate(`/sandboxes/${sbx.id}`)}
+              onClick={() => navigate(`/w/${selectedWorkspaceId}/sandboxes/${sbx.id}`)}
               className={`group flex cursor-pointer items-center gap-2 px-3 py-2 text-sm hover:bg-[var(--secondary)] ${
                 activeSandboxId === sbx.id ? 'bg-[var(--secondary)]' : ''
               }`}
