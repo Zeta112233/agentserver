@@ -23,13 +23,14 @@ RUN npm install -g @anthropic-ai/claude-code
 # Copy built NanoClaw
 COPY --from=builder /app /app
 
-# Run as the built-in node user (UID 1000) to match init container's chown target.
-# Claude Code refuses --dangerously-skip-permissions as root.
+# Replace the built-in node user with agent (same UID 1000) to match
+# the other sandbox images and the init container's chown target.
+RUN usermod -l agent -d /home/agent -m node && groupmod -n agent node
 
-# NanoClaw data directories and .env file (owned by nanoclaw user)
+# NanoClaw data directories and .env file (owned by agent user)
 RUN mkdir -p /app/store /app/groups /app/data && \
     touch /app/.env && \
-    chown -R node:node /app/store /app/groups /app/data /app/.env
+    chown -R agent:agent /app/store /app/groups /app/data /app/.env
 
 # Config injection entrypoint
 COPY nanoclaw-entrypoint.sh /entrypoint.sh
@@ -37,7 +38,7 @@ RUN chmod +x /entrypoint.sh
 
 EXPOSE 3002
 
-USER node
+USER agent
 
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["node", "dist/index.js"]
