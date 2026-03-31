@@ -157,11 +157,13 @@ func (cc *MatrixCryptoClient) SyncAndDecrypt(ctx context.Context, selfUserID str
 			// Decrypted events already have their content parsed by DecryptMegolmEvent.
 			if evt.Content.Parsed == nil {
 				if err := evt.Content.ParseRaw(evt.Type); err != nil {
+					log.Printf("matrix: ParseRaw failed room=%s event=%s: %v", roomID, evt.ID, err)
 					continue
 				}
 			}
 			msgContent := evt.Content.AsMessage()
 			if msgContent == nil {
+				log.Printf("matrix: AsMessage() nil room=%s event=%s parsed_type=%T", roomID, evt.ID, evt.Content.Parsed)
 				continue
 			}
 
