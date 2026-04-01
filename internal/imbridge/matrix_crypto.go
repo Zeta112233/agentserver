@@ -166,9 +166,15 @@ func (cc *MatrixCryptoClient) SyncAndDecrypt(ctx context.Context, selfUserID str
 			if !mentioned && strings.Contains(msgContent.Body, string(cc.client.UserID)) {
 				mentioned = true
 			}
-			if !isDM && !mentioned {
-				log.Printf("matrix: group msg not mentioned room=%s body=%q selfUserID=%s hasMentions=%v",
-					roomID, msgContent.Body, selfUserID, msgContent.Mentions != nil)
+			if !isDM {
+				mentionUserIDs := ""
+				if msgContent.Mentions != nil {
+					for _, uid := range msgContent.Mentions.UserIDs {
+						mentionUserIDs += string(uid) + ","
+					}
+				}
+				log.Printf("matrix: group msg room=%s mentioned=%v body=%q selfUserID=%s mentionUserIDs=[%s]",
+					roomID, mentioned, msgContent.Body, selfUserID, mentionUserIDs)
 			}
 
 			msg := MatrixMessage{
