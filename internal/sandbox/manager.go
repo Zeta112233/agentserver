@@ -418,6 +418,9 @@ fs.writeFileSync(path, JSON.stringify(existing, null, 2));
 		// because container-runtime.ts reads process.env before NanoClaw's
 		// readEnvFile() has a chance to parse the .env file.
 		containerEnv = append(containerEnv, corev1.EnvVar{Name: "NANOCLAW_NO_CONTAINER", Value: "true"})
+		if m.cfg.NanoclawModel != "" {
+			containerEnv = append(containerEnv, corev1.EnvVar{Name: "CLAUDE_MODEL", Value: m.cfg.NanoclawModel})
+		}
 	default: // "opencode"
 		if opts.OpencodeToken != "" {
 			containerEnv = append(containerEnv, corev1.EnvVar{Name: "OPENCODE_SERVER_PASSWORD", Value: opts.OpencodeToken})

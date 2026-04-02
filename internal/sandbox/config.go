@@ -25,6 +25,7 @@ type Config struct {
 	NanoclawRuntimeClassName string
 	NanoclawIMBridgeEnabled  bool
 	NanoclawBridgeBaseURL    string // agentserver internal URL for NanoClaw pods to call back (e.g. "http://agentserver:8080")
+	NanoclawModel            string // Claude Code model override (e.g. "claude-opus-4-6")
 }
 
 // DefaultConfig returns a Config populated from environment variables with sensible defaults.
@@ -45,6 +46,7 @@ func DefaultConfig() Config {
 		NanoclawRuntimeClassName: os.Getenv("NANOCLAW_RUNTIME_CLASS"),
 		NanoclawIMBridgeEnabled:  os.Getenv("NANOCLAW_IM_BRIDGE_ENABLED") == "true" || os.Getenv("NANOCLAW_WEIXIN_ENABLED") == "true",
 		NanoclawBridgeBaseURL:    os.Getenv("NANOCLAW_BRIDGE_BASE_URL"),
+		NanoclawModel:            os.Getenv("NANOCLAW_MODEL"),
 	}
 }
 

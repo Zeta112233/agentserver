@@ -106,6 +106,7 @@ sandbox:
     runtimeClassName: ""
     weixinEnabled: false     # Enable WeChat channel via agentserver bridge
     bridgeBaseUrl: ""        # agentserver internal URL for NanoClaw pod callbacks (e.g. "http://agentserver.agentserver.svc:8080")
+    model: ""                # Claude Code model override (e.g. "claude-opus-4-6")
   networkPolicy:
     enabled: false
     # CIDR ranges to deny egress to (internal/private networks).

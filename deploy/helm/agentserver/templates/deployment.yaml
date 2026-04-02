@@ -154,6 +154,10 @@ spec:
             - name: NANOCLAW_WEIXIN_ENABLED
               value: "true"
             {{- end }}
+            {{- if .Values.sandbox.nanoclaw.model }}
+            - name: NANOCLAW_MODEL
+              value: {{ .Values.sandbox.nanoclaw.model | quote }}
+            {{- end }}
             {{- if .Values.sandbox.nanoclaw.bridgeBaseUrl }}
             - name: NANOCLAW_BRIDGE_BASE_URL
               value: {{ .Values.sandbox.nanoclaw.bridgeBaseUrl | quote }}
