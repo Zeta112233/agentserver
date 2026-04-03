@@ -492,15 +492,16 @@ Claude Code 的 Agent 发现策略有以下值得借鉴的设计：
 2. **依赖就绪检查**：CC 的 `filterAgentsByMcpRequirements()` 在返回可用 Agent 前检查其声明的 MCP 依赖是否就绪。Agent 不仅要"在线"，还要"能力完备"。
 3. **自动注册**：CC 的 Agent 定义从文件系统自动加载，不需要显式 API 调用注册。
 
+4. **Agent 列表注入上下文**：CC 把可用 Agent 列表直接注入系统提示词（通过 `agent_listing_delta` attachment 增量更新），让 AI 模型从一开始就知道有哪些 Agent 可用，从而**主动决定**是否委派任务。如果只提供 `discover_agents` API，模型必须先想到调用发现工具才能知道有谁可用——这大大降低了自主委派的可能性。
+5. **Skill 执行指南**：CC 的 skill 不仅是能力标签（外部视角：这个 Agent 能做什么），还包含执行指南（内部视角：怎么做这件事）。当 Agent 被分配到某个 skill 对应的任务时，skill 的 prompt 被注入到 Agent 的系统提示词中，指导具体的执行方式。
+
 以下 CC 设计不适用于 agentserver（以及原因）：
 
 | CC 设计 | 不适用原因 |
 |---------|-----------|
 | 四层优先级覆盖链 | agentserver 每个 sandbox 只有一张 card，不存在多源冲突 |
 | Built-in Agent 类型 | agentserver 不内置 Agent，所有 Agent 均用户注册 |
-| agent_listing_delta 注入 | agentserver 通过 API 发现，不需要注入系统提示词 |
 | Fork path | agentserver Agent 间无共享上下文 |
-| Skill 加载系统 | agentserver Agent 能力通过 card 声明，无需独立 skill 机制 |
 
 ### Scope
 
@@ -559,6 +560,10 @@ type Skill struct {
     Name        string   `json:"name"`
     Description string   `json:"description"`
     Tags        []string `json:"tags,omitempty"`
+    // Prompt 是 skill 的执行指南。当 Agent 被委派此 skill 对应的任务时，
+    // TaskWorker 将此 prompt 注入到 Agent 的系统提示词中，指导具体执行方式。
+    // 借鉴 CC 的 skill 系统：card 声明"能做什么"，prompt 指导"怎么做"。
+    Prompt      string   `json:"prompt,omitempty"`
 }
 
 type MCPTool struct {
@@ -640,9 +645,25 @@ skills:
   - name: code-review
     description: "Review Go code for bugs, security issues, and best practices"
     tags: [go, security, review]
+    # prompt 是执行指南：委派 code-review 任务时注入到 Agent 系统提示词
+    prompt: |
+      When reviewing Go code, follow this checklist:
+      1. Check error handling — no swallowed errors, proper wrapping with %w
+      2. Check for race conditions — shared state without mutex or atomic
+      3. Check for SQL injection in database queries
+      4. Verify proper resource cleanup — defer Close() on all io.Closer
+      5. Check for goroutine leaks — context cancellation, channel closing
+      6. Verify error types implement the error interface correctly
   - name: testing
     description: "Write and run Go tests"
     tags: [go, test]
+    prompt: |
+      When writing Go tests:
+      1. Use table-driven tests for multiple cases
+      2. Use testify/assert for clear failure messages
+      3. Name test functions as TestXxx_scenario_expectation
+      4. Use t.Parallel() where safe
+      5. Mock external dependencies with interfaces
 tags: [go, backend, senior]
 max_concurrency: 2
 max_turns: 100
@@ -1380,7 +1401,8 @@ cmd/agentserver-mcp-bridge/
 ├── main.go                 // stdio server, JSON-RPC 2.0
 internal/mcpbridge/
 ├── bridge.go               // MCP server implementation
-└── tools.go                // tool handlers
+├── tools.go                // tool handlers
+└── listing.go              // agent listing injection + refresh
 ```
 
 **Configuration in Claude Code** (via MCP server config):
@@ -1399,6 +1421,124 @@ internal/mcpbridge/
 }
 ```
 
+### Agent Listing Injection（借鉴 CC 的 agent_listing_delta）
+
+**问题**：如果 AI 模型不知道有哪些 Agent 可用，它不会主动调用 `discover_agents`，也就不会主动委派任务。`discover_agents` 工具只能作为精确查询的补充，不能作为唯一的发现入口。
+
+**方案**：`agentserver-mcp-bridge` 在启动时和周期性刷新时，将可用 Agent 列表注入到 `delegate_task` 工具的 description 中。模型读取工具描述就能看到有哪些 Agent 可用。
+
+```go
+// internal/mcpbridge/listing.go
+
+type AgentListing struct {
+    mu       sync.RWMutex
+    agents   []DiscoveredAgent
+    apiURL   string
+    token    string
+    interval time.Duration // 默认 60s
+}
+
+// Refresh 从服务端拉取最新 Agent 列表
+func (l *AgentListing) Refresh(ctx context.Context) error {
+    resp, err := httpGet(l.apiURL+"/discovery/agents?status=available&exclude="+selfID, l.token)
+    // ...
+    l.mu.Lock()
+    l.agents = parsed
+    l.mu.Unlock()
+    return nil
+}
+
+// FormatForToolDescription 生成注入到 delegate_task 工具描述中的 Agent 列表
+func (l *AgentListing) FormatForToolDescription() string {
+    l.mu.RLock()
+    defer l.mu.RUnlock()
+
+    if len(l.agents) == 0 {
+        return "\n\nNo other agents are currently available in this workspace."
+    }
+
+    var sb strings.Builder
+    sb.WriteString("\n\nAvailable agents in this workspace:\n")
+    for _, a := range l.agents {
+        // 格式参考 CC 的 agent listing:
+        // - Name (id): description [tags] — status
+        sb.WriteString(fmt.Sprintf("- %s (%s): %s", a.Name, a.AgentID, a.Description))
+        if len(a.Tags) > 0 {
+            sb.WriteString(fmt.Sprintf(" [%s]", strings.Join(a.Tags, ", ")))
+        }
+        if a.CurrentTasks > 0 {
+            sb.WriteString(fmt.Sprintf(" — %d/%d tasks", a.CurrentTasks, a.MaxConcurrency))
+        }
+        sb.WriteString("\n")
+    }
+    return sb.String()
+}
+```
+
+`delegate_task` 工具描述动态生成：
+
+```go
+func (b *Bridge) getDelegateTaskDescription() string {
+    base := "Delegate a task to another agent in your workspace. " +
+        "Use discover_agents for filtered search if needed."
+    return base + b.listing.FormatForToolDescription()
+}
+```
+
+模型看到的效果：
+
+```
+Tool: delegate_task
+Description: Delegate a task to another agent in your workspace. Use discover_agents for filtered search if needed.
+
+Available agents in this workspace:
+- Go Expert (sandbox-abc): Specialized in Go code review, testing, and optimization [go, security, backend]
+- Frontend Dev (sandbox-def): React/CSS UI development and component design [react, css, frontend]
+- DevOps (sandbox-ghi): CI/CD pipeline management and Kubernetes deployment [k8s, ci, docker] — 1/2 tasks
+```
+
+**刷新策略**：
+- 启动时立即拉取一次
+- 每 60 秒定时刷新
+- 收到 `inject_tools` tunnel frame（含拓扑变更信号）时立即刷新
+- MCP `tools/list` 请求时返回最新描述（Claude Code 会在 MCP tools 变更后刷新工具列表）
+
+### Skill Prompt Injection（借鉴 CC 的 Skill 系统）
+
+当任务委派到 Agent 时，TaskWorker 根据匹配到的 skill 注入执行指南：
+
+```go
+// internal/agent/task_worker.go
+
+func (w *TaskWorker) buildSystemPrompt(task *TaskRequest, card *AgentCardData) string {
+    var sb strings.Builder
+
+    // 1. Agent 身份
+    sb.WriteString(fmt.Sprintf("You are %q — %s\n\n", card.Name, card.Description))
+
+    // 2. Skill 执行指南（如果任务指定了 skill 且 card 中该 skill 有 prompt）
+    if task.Skill != "" {
+        for _, skill := range card.Skills {
+            if skill.Name == task.Skill && skill.Prompt != "" {
+                sb.WriteString("## Execution Guidelines\n\n")
+                sb.WriteString(skill.Prompt)
+                sb.WriteString("\n\n")
+                break
+            }
+        }
+    }
+
+    // 3. 任务上下文
+    sb.WriteString(fmt.Sprintf("You are executing a delegated task from agent %q.\n", task.RequesterName))
+
+    return sb.String()
+}
+```
+
+这样 card 的 skill 同时服务两个目的：
+- **外部**（description + tags）：告诉发现方"我能做什么"
+- **内部**（prompt）：告诉执行方"怎么做这件事"
+
 ### inject_tools Tunnel Frame
 
 Server sends `inject_tools` control frame to local agents on tunnel connect and topology changes:
@@ -1406,27 +1546,28 @@ Server sends `inject_tools` control frame to local agents on tunnel connect and 
 ```json
 {
   "type": "inject_tools",
-  "tools": ["discover_agents", "delegate_task", "check_task", "send_message"],
+  "tools": ["discover_agents", "delegate_task", "check_task", "send_message", "read_inbox"],
   "api_base_url": "https://agentserver.example.com/api/agent",
-  "auth_token": "<proxy_token>"
+  "auth_token": "<proxy_token>",
+  "topology_version": 3
 }
 ```
+
+`topology_version` 递增表示 workspace 的 Agent 拓扑发生了变化（Agent 上线/下线/card 更新）。MCP bridge 收到新版本后立即刷新 Agent 列表。
 
 Agent-side: starts local `agentserver-mcp-bridge` process, writes MCP config to `.claude/settings.json`.
 
 ### Injected MCP Tools
 
-| Tool | Description |
-|------|-------------|
-| `discover_agents` | Find agents by skill, tags, type, status |
-| `delegate_task` | Create task (sync/async) with real-time streaming |
-| `check_task` | Get task status and result |
-| `send_message` | Send message to another agent (mailbox) |
-| `read_inbox` | Read messages from inbox |
+| Tool | Description | Agent 列表注入 |
+|------|-------------|---------------|
+| `discover_agents` | 按 skill/tag/status 精确查询 Agent（补充搜索） | 否 |
+| `delegate_task` | 创建委派任务（sync/async），支持实时流式输出 | **是 — 工具描述中包含可用 Agent 列表** |
+| `check_task` | 查询委派任务状态和结果 | 否 |
+| `send_message` | 向 Agent 发送邮箱消息（点对点/广播） | 否 |
+| `read_inbox` | 读取收件箱消息（长轮询 30s） | 否 |
 
-The `delegate_task` tool in async mode returns a task ID immediately. The AI model can then:
-1. Call `check_task` periodically to poll status
-2. Or use Claude Code's background agent pattern to monitor the SSE stream
+`delegate_task` 是唯一注入 Agent 列表的工具，因为它是模型决定委派的入口。`discover_agents` 作为精确查询的补充，当模型需要按条件筛选（如"找一个懂 Go 的 Agent"）时使用。
 
 ### Files
 
@@ -1435,8 +1576,10 @@ The `delegate_task` tool in async mode returns a task ID immediately. The AI mod
 | Create | `cmd/agentserver-mcp-bridge/main.go` | MCP bridge binary |
 | Create | `internal/mcpbridge/bridge.go` | MCP server implementation |
 | Create | `internal/mcpbridge/tools.go` | Tool handlers (5 tools) |
+| Create | `internal/mcpbridge/listing.go` | Agent listing injection + periodic refresh |
 | Modify | `internal/agent/client.go` | Handle inject_tools, start bridge |
-| Modify | `internal/sandboxproxy/tunnel.go` | Send inject_tools on connect |
+| Modify | `internal/agent/task_worker.go` | Skill prompt injection in buildSystemPrompt |
+| Modify | `internal/sandboxproxy/tunnel.go` | Send inject_tools on connect + topology changes |
 | Modify | `Dockerfile` | Include agentserver-mcp-bridge |
 
 ---
