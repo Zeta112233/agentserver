@@ -38,6 +38,7 @@ models:
   anthropicApiKey: ""
   anthropicBaseUrl: ""
   anthropicAuthToken: ""
+  geminiApiKey: ""
 
 platform:
   # Domain for the platform web UI (e.g. "platform.agentserver.dev").

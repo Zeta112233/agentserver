@@ -26,6 +26,7 @@ type Config struct {
 	NanoclawIMBridgeEnabled  bool
 	NanoclawBridgeBaseURL    string // agentserver internal URL for NanoClaw pods to call back (e.g. "http://agentserver:8080")
 	NanoclawModel            string // Claude Code model override (e.g. "claude-opus-4-6")
+	GeminiProxyBaseURL       string // Gemini proxy base URL without path (e.g. "http://llmproxy:8081")
 }
 
 // DefaultConfig returns a Config populated from environment variables with sensible defaults.
@@ -47,6 +48,7 @@ func DefaultConfig() Config {
 		NanoclawIMBridgeEnabled:  os.Getenv("NANOCLAW_IM_BRIDGE_ENABLED") == "true" || os.Getenv("NANOCLAW_WEIXIN_ENABLED") == "true",
 		NanoclawBridgeBaseURL:    os.Getenv("NANOCLAW_BRIDGE_BASE_URL"),
 		NanoclawModel:            os.Getenv("NANOCLAW_MODEL"),
+		GeminiProxyBaseURL:       os.Getenv("GOOGLE_GEMINI_BASE_URL"),
 	}
 }
 
@@ -207,7 +209,7 @@ func BuildOpenclawConfig(proxyBaseURL, proxyToken, gatewayToken string, customMo
 // BuildNanoclawConfig returns the environment variable content for a nanoclaw
 // container. When byokBaseURL and byokAPIKey are non-empty (BYOK mode), they
 // override the default proxy credentials.
-func BuildNanoclawConfig(proxyBaseURL, proxyToken, assistantName string, imBridgeURL, bridgeSecret string, byokBaseURL, byokAPIKey string) string {
+func BuildNanoclawConfig(proxyBaseURL, proxyToken, assistantName string, imBridgeURL, bridgeSecret string, byokBaseURL, byokAPIKey string, geminiProxyBaseURL string) string {
 	baseURL := proxyBaseURL
 	apiKey := proxyToken
 	if byokBaseURL != "" {
@@ -229,6 +231,10 @@ func BuildNanoclawConfig(proxyBaseURL, proxyToken, assistantName string, imBridg
 	}
 	if bridgeSecret != "" {
 		lines = append(lines, "NANOCLAW_BRIDGE_SECRET="+bridgeSecret)
+	}
+	if geminiProxyBaseURL != "" {
+		lines = append(lines, "GOOGLE_GEMINI_BASE_URL="+geminiProxyBaseURL)
+		lines = append(lines, "GEMINI_API_KEY="+apiKey)
 	}
 	return strings.Join(lines, "\n") + "\n"
 }

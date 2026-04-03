@@ -85,6 +85,8 @@ spec:
                 secretKeyRef:
                   name: {{ .Release.Name }}-secret
                   key: anthropic-auth-token
+            - name: GOOGLE_GEMINI_BASE_URL
+              value: {{ printf "http://%s-llmproxy.%s.svc:%v" .Release.Name .Release.Namespace (int .Values.llmproxy.port) | quote }}
             {{- /* Build OPENCODE_CONFIG_CONTENT with llmproxy baseURL merged in.
                  Users can override baseURL via sandbox.opencode.config.provider.anthropic.options.baseURL */}}
             {{- $llmproxyURL := printf "http://%s-llmproxy.%s.svc:%v/v1" .Release.Name .Release.Namespace (int .Values.llmproxy.port) }}
@@ -252,6 +254,7 @@ stringData:
   anthropic-api-key: {{ .Values.models.anthropicApiKey | quote }}
   anthropic-base-url: {{ .Values.models.anthropicBaseUrl | quote }}
   anthropic-auth-token: {{ .Values.models.anthropicAuthToken | quote }}
+  gemini-api-key: {{ .Values.models.geminiApiKey | quote }}
   {{- if .Values.platform.auth.oidc.github.enabled }}
   github-client-secret: {{ .Values.platform.auth.oidc.github.clientSecret | quote }}
   {{- end }}
@@ -272,6 +275,7 @@ stringData:
   anthropic-api-key: {{ .Values.models.anthropicApiKey | quote }}
   anthropic-base-url: {{ .Values.models.anthropicBaseUrl | quote }}
   anthropic-auth-token: {{ .Values.models.anthropicAuthToken | quote }}
+  gemini-api-key: {{ .Values.models.geminiApiKey | quote }}
   {{- if .Values.platform.auth.oidc.github.enabled }}
   github-client-secret: {{ .Values.platform.auth.oidc.github.clientSecret | quote }}
   {{- end }}

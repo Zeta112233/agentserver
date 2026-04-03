@@ -334,6 +334,13 @@ func (m *Manager) StartContainerWithIP(id string, opts process.StartOptions) (st
 			corev1.EnvVar{Name: "ANTHROPIC_BASE_URL", Value: strings.TrimSuffix(proxyBaseURL, "/v1")},
 		)
 	}
+	// Inject Gemini proxy credentials as real env vars (same reason as Anthropic above).
+	if m.cfg.GeminiProxyBaseURL != "" && opts.ProxyToken != "" {
+		containerEnv = append(containerEnv,
+			corev1.EnvVar{Name: "GEMINI_API_KEY", Value: opts.ProxyToken},
+			corev1.EnvVar{Name: "GOOGLE_GEMINI_BASE_URL", Value: m.cfg.GeminiProxyBaseURL},
+		)
+	}
 
 	// Select image, port, and command based on sandbox type.
 	sandboxImage := m.cfg.Image
@@ -412,6 +419,7 @@ fs.writeFileSync(path, JSON.stringify(existing, null, 2));
 			nanoclawProxyURL, opts.ProxyToken, opts.AssistantName,
 			imBridgeURL, bridgeSecret,
 			opts.BYOKBaseURL, opts.BYOKAPIKey,
+			m.cfg.GeminiProxyBaseURL,
 		)
 		containerEnv = append(containerEnv, corev1.EnvVar{Name: "NANOCLAW_CONFIG_CONTENT", Value: nanoclawCfg})
 		// NANOCLAW_NO_CONTAINER must be a real env var (not just in .env file)
