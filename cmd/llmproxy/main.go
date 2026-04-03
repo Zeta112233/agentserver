@@ -16,8 +16,10 @@ import (
 func main() {
 	cfg := llmproxy.LoadConfigFromEnv()
 
-	if cfg.AnthropicAPIKey == "" && cfg.AnthropicAuthToken == "" {
-		log.Fatal("either ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN is required")
+	hasAnthropic := cfg.AnthropicAPIKey != "" || cfg.AnthropicAuthToken != ""
+	hasGemini := cfg.GeminiAPIKey != ""
+	if !hasAnthropic && !hasGemini {
+		log.Fatal("at least one LLM provider must be configured: set ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN and/or GEMINI_API_KEY")
 	}
 	if cfg.AgentserverURL == "" {
 		log.Fatal("LLMPROXY_AGENTSERVER_URL is required")

@@ -47,6 +47,9 @@ func (s *Server) Routes() http.Handler {
 	// Anthropic API proxy (all /v1/* paths).
 	r.HandleFunc("/v1/*", s.handleAnthropicProxy)
 
+	// Gemini API proxy (all /v1beta/* paths).
+	r.HandleFunc("/v1beta/*", s.handleGeminiProxy)
+
 	// Internal API (requires database, network-isolated — only agentserver can reach these).
 	r.Route("/internal", func(r chi.Router) {
 		r.Use(s.requireStore)
