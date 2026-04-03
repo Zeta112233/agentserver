@@ -16,7 +16,7 @@ const (
 )
 
 // ExtractTraceID extracts a trace ID from the request.
-// Priority: custom header → OpenCode session header → auto-generate.
+// Priority: custom header → OpenCode/Claude Code session header → auto-generate.
 // Returns (traceID, source).
 func (s *Server) ExtractTraceID(r *http.Request, body []byte) (string, string) {
 	// 1. Check custom trace header.
@@ -31,7 +31,12 @@ func (s *Server) ExtractTraceID(r *http.Request, body []byte) (string, string) {
 		return traceIDPrefix + hdr, "opencode"
 	}
 
-	// 3. Auto-generate.
+	// 3. Try Claude Code X-Claude-Code-Session-Id header.
+	if hdr := r.Header.Get("X-Claude-Code-Session-Id"); hdr != "" {
+		return traceIDPrefix + hdr, "claudecode"
+	}
+
+	// 4. Auto-generate.
 	return GenerateTraceID(), "auto"
 }
 
@@ -70,6 +75,11 @@ func (s *Server) ExtractGeminiTraceID(r *http.Request, body []byte) (string, str
 		return geminiTraceIDPrefix + hdr, "opencode"
 	}
 
-	// 3. Auto-generate.
+	// 3. Try Claude Code X-Claude-Code-Session-Id header.
+	if hdr := r.Header.Get("X-Claude-Code-Session-Id"); hdr != "" {
+		return geminiTraceIDPrefix + hdr, "claudecode"
+	}
+
+	// 4. Auto-generate.
 	return GenerateGeminiTraceID(), "auto"
 }
