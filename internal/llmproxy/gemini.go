@@ -15,8 +15,13 @@ import (
 
 // handleGeminiProxy proxies Gemini API requests, recording token usage and trace data.
 func (s *Server) handleGeminiProxy(w http.ResponseWriter, r *http.Request) {
-	// 1. Validate proxy token (x-api-key header).
-	proxyToken := r.Header.Get("x-api-key")
+	// 1. Validate proxy token.
+	// The go-genai SDK sends credentials via x-goog-api-key, but clients
+	// may also use x-api-key (consistent with the Anthropic proxy flow).
+	proxyToken := r.Header.Get("x-goog-api-key")
+	if proxyToken == "" {
+		proxyToken = r.Header.Get("x-api-key")
+	}
 	if proxyToken == "" {
 		http.Error(w, "missing api key", http.StatusUnauthorized)
 		return
@@ -123,8 +128,9 @@ func (s *Server) handleGeminiProxy(w http.ResponseWriter, r *http.Request) {
 			req.URL.RawQuery = r.URL.RawQuery
 			req.Host = target.Host
 
-			// Remove the proxy token header.
+			// Remove proxy token headers (client may have sent either).
 			req.Header.Del("x-api-key")
+			req.Header.Del("x-goog-api-key")
 
 			if useModelserver {
 				req.Header.Set("Authorization", "Bearer "+msToken)
