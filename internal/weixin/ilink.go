@@ -393,7 +393,12 @@ func SendTextMessage(ctx context.Context, apiBaseURL, botToken, toUserID, text, 
 
 // GetUploadURLResponse is the response from ilink/bot/getuploadurl.
 type GetUploadURLResponse struct {
-	UploadParam string `json:"upload_param"`
+	Ret            int    `json:"ret"`
+	ErrCode        int    `json:"errcode,omitempty"`
+	ErrMsg         string `json:"errmsg,omitempty"`
+	UploadParam    string `json:"upload_param"`
+	UploadFullURL  string `json:"upload_full_url,omitempty"`
+	ThumbUploadParam string `json:"thumb_upload_param,omitempty"`
 }
 
 // GetUploadURL obtains a pre-signed CDN upload URL from iLink.
@@ -430,21 +435,35 @@ func GetUploadURL(ctx context.Context, apiBaseURL, botToken string, params map[s
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("ilink getuploadurl: status %d: %s", resp.StatusCode, string(body))
+	}
+
 	var result GetUploadURLResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("ilink getuploadurl: decode: %w", err)
 	}
-	if result.UploadParam == "" {
-		return nil, fmt.Errorf("ilink getuploadurl: empty upload_param")
+	if result.Ret != 0 {
+		return nil, fmt.Errorf("ilink getuploadurl: ret=%d errcode=%d errmsg=%s", result.Ret, result.ErrCode, result.ErrMsg)
+	}
+	if result.UploadFullURL == "" && result.UploadParam == "" {
+		return nil, fmt.Errorf("ilink getuploadurl: empty upload_param and upload_full_url")
 	}
 	return &result, nil
 }
 
 // UploadToCDN uploads encrypted file data to the iLink CDN.
 // Returns the download encrypt_query_param from the response header.
-func UploadToCDN(ctx context.Context, cdnBaseURL, uploadParam, filekey string, ciphertext []byte) (string, error) {
-	cdnURL := fmt.Sprintf("%s/upload?encrypted_query_param=%s&filekey=%s",
-		cdnBaseURL, url.QueryEscape(uploadParam), url.QueryEscape(filekey))
+// If uploadFullURL is non-empty, it is used directly as the POST target (takes precedence over uploadParam).
+func UploadToCDN(ctx context.Context, cdnBaseURL, uploadParam, filekey string, ciphertext []byte, uploadFullURL string) (string, error) {
+	var cdnURL string
+	if trimmed := strings.TrimSpace(uploadFullURL); trimmed != "" {
+		cdnURL = trimmed
+	} else {
+		cdnURL = fmt.Sprintf("%s/upload?encrypted_query_param=%s&filekey=%s",
+			cdnBaseURL, url.QueryEscape(uploadParam), url.QueryEscape(filekey))
+	}
 
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
@@ -586,7 +605,7 @@ func UploadAndSendImage(ctx context.Context, apiBaseURL, cdnBaseURL, botToken, t
 	if cdnURL == "" {
 		cdnURL = DefaultCDNBaseURL
 	}
-	downloadParam, err := UploadToCDN(ctx, cdnURL, uploadResp.UploadParam, filekey, ciphertext)
+	downloadParam, err := UploadToCDN(ctx, cdnURL, uploadResp.UploadParam, filekey, ciphertext, uploadResp.UploadFullURL)
 	if err != nil {
 		return fmt.Errorf("cdn upload: %w", err)
 	}
