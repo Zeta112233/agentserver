@@ -17,7 +17,11 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
+	"crypto/rand"
+	"encoding/hex"
+
 	"github.com/agentserver/agentserver/internal/auth"
+	"github.com/agentserver/agentserver/internal/bridge"
 	"github.com/agentserver/agentserver/internal/container"
 	"github.com/agentserver/agentserver/internal/db"
 	"github.com/agentserver/agentserver/internal/namespace"
@@ -219,6 +223,17 @@ var serveCmd = &cobra.Command{
 		srv.ModelserverOAuthIntrospectURL = os.Getenv("MODELSERVER_OAUTH_INTROSPECT_URL")
 		srv.ModelserverOAuthRedirectURI = os.Getenv("MODELSERVER_OAUTH_REDIRECT_URI")
 		srv.ModelserverProxyURL = os.Getenv("MODELSERVER_PROXY_URL")
+
+		// Bridge handler (CCR V2 compatible)
+		bridgeJWTSecret := os.Getenv("BRIDGE_JWT_SECRET")
+		if bridgeJWTSecret == "" {
+			b := make([]byte, 32)
+			rand.Read(b)
+			bridgeJWTSecret = hex.EncodeToString(b)
+			log.Println("Warning: BRIDGE_JWT_SECRET not set, using auto-generated secret (bridge sessions won't survive restart)")
+		}
+		srv.BridgeHandler = bridge.NewHandler(database, []byte(bridgeJWTSecret))
+
 		addr := fmt.Sprintf(":%d", port)
 
 		// Start idle watcher with a dynamic timeout getter that reads from the settings chain.
@@ -231,6 +246,11 @@ var serveCmd = &cobra.Command{
 		idleWatcher.Start()
 		log.Printf("Idle watcher started (effective timeout: %s)", srv.GetEffectiveIdleTimeout())
 
+		// Agent health monitor
+		healthCtx, healthCancel := context.WithCancel(context.Background())
+		healthMon := server.NewAgentHealthMonitor(database)
+		go healthMon.Run(healthCtx)
+
 		httpServer := &http.Server{Addr: addr, Handler: srv.Router()}
 
 		// Graceful shutdown on SIGTERM/SIGINT
@@ -241,6 +261,7 @@ var serveCmd = &cobra.Command{
 			log.Printf("Received %v, shutting down...", sig)
 			httpServer.Shutdown(context.Background())
 			idleWatcher.Stop()
+			healthCancel()
 			log.Println("Cleaning up active sandboxes...")
 			procMgr.Close()
 		}()

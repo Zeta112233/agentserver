@@ -20,6 +20,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
 	"github.com/agentserver/agentserver/internal/auth"
+	"github.com/agentserver/agentserver/internal/bridge"
 	"github.com/agentserver/agentserver/internal/db"
 	"github.com/agentserver/agentserver/internal/namespace"
 	"github.com/agentserver/agentserver/internal/process"
@@ -60,6 +61,9 @@ type Server struct {
 	ModelserverOAuthRedirectURI   string
 	ModelserverProxyURL           string
 	DatabaseURL                  string // PostgreSQL connection URL (needed for Matrix E2EE crypto DB)
+
+	// BridgeHandler provides CCR V2-compatible bridge API for agent sessions.
+	BridgeHandler *bridge.Handler
 }
 
 func New(a *auth.Auth, oidcMgr *auth.OIDCManager, database *db.DB, sandboxStore *sbxstore.Store, processManager process.Manager, driveManager storage.DriveManager, nsMgr *namespace.Manager, tunnelReg *tunnel.Registry, staticFS fs.FS, passwordAuthEnabled bool) *Server {
@@ -159,6 +163,13 @@ func (s *Server) Router() http.Handler {
 
 	// Agent registration (auth via one-time code, no cookie auth needed).
 	r.Post("/api/agent/register", s.handleAgentRegister)
+
+	// Agent card registration (auth via proxy_token).
+	r.Post("/api/agent/discovery/cards", s.handleRegisterAgentCard)
+
+	// Task polling and status updates for workers (auth via proxy_token).
+	r.Get("/api/agent/tasks/poll", s.handlePollTasks)
+	r.Put("/api/agent/tasks/{id}/status", s.handleUpdateTaskStatus)
 
 	// Auth endpoints (no auth required)
 	if s.PasswordAuthEnabled {
@@ -267,6 +278,17 @@ func (s *Server) Router() http.Handler {
 		// Agent registration code generation
 		r.Post("/api/workspaces/{wid}/agent-code", s.handleCreateAgentCode)
 
+		// Agent discovery
+		r.Get("/api/workspaces/{wid}/agents", s.handleListAgentCards)
+		r.Get("/api/agents/{sandboxId}", s.handleGetAgentCard)
+
+		// Agent tasks
+		r.Post("/api/workspaces/{wid}/tasks", s.handleCreateTask)
+		r.Get("/api/workspaces/{wid}/tasks", s.handleListTasks)
+		r.Get("/api/tasks/{id}", s.handleGetTask)
+		r.Post("/api/tasks/{id}/cancel", s.handleCancelTask)
+		r.Get("/api/tasks/{id}/stream", s.handleTaskStream)
+
 		// Admin routes
 		r.Route("/api/admin", func(r chi.Router) {
 			r.Use(s.requireAdmin)
@@ -293,6 +315,31 @@ func (s *Server) Router() http.Handler {
 			r.Delete("/workspaces/{id}/llm-quota", s.handleAdminDeleteWorkspaceLLMQuota)
 		})
 	})
+
+	// Bridge API (CCR V2 compatible)
+	if s.BridgeHandler != nil {
+		r.Route("/v1/agent", func(r chi.Router) {
+			// Session lifecycle: proxy_token or cookie auth
+			r.Group(func(r chi.Router) {
+				r.Use(s.BridgeHandler.AgentOrUserAuthMiddleware(s.Auth.Middleware))
+				r.Post("/sessions", s.BridgeHandler.HandleCreateSession)
+				r.Post("/sessions/{sessionId}/bridge", s.BridgeHandler.HandleBridge)
+				r.Post("/sessions/{sessionId}/archive", s.BridgeHandler.HandleArchive)
+			})
+			// Worker endpoints: JWT auth
+			r.Route("/sessions/{sessionId}", func(r chi.Router) {
+				r.Use(s.BridgeHandler.WorkerAuthMiddleware)
+				r.Get("/worker/events/stream", s.BridgeHandler.HandleWorkerEventStream)
+				r.Post("/worker/events", s.BridgeHandler.HandleWorkerEvents)
+				r.Post("/worker/internal-events", s.BridgeHandler.HandleWorkerInternalEvents)
+				r.Post("/worker/events/delivery", s.BridgeHandler.HandleWorkerDelivery)
+				r.Put("/worker", s.BridgeHandler.HandleWorkerState)
+				r.Post("/worker/heartbeat", s.BridgeHandler.HandleWorkerHeartbeat)
+				r.Get("/worker", s.BridgeHandler.HandleGetWorker)
+				r.Get("/worker/internal-events", s.BridgeHandler.HandleGetInternalEvents)
+			})
+		})
+	}
 
 	// Static files
 	if s.StaticFS != nil {

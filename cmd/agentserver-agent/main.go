@@ -185,6 +185,56 @@ On subsequent runs, saved credentials are used automatically.`,
 	},
 }
 
+var taskWorkerCmd = &cobra.Command{
+	Use:   "task-worker",
+	Short: "Run as a task worker that polls and executes delegated tasks",
+	Long: `Start a background task worker that polls agentserver for delegated tasks
+and executes them using the Claude Agent SDK.
+
+Requires --server and a valid sandbox registration (credentials from ~/.agentserver/registry.json).`,
+	Run: func(cmd *cobra.Command, args []string) {
+		taskServer, _ := cmd.Flags().GetString("server")
+		taskProxyToken, _ := cmd.Flags().GetString("proxy-token")
+		taskSandboxID, _ := cmd.Flags().GetString("sandbox-id")
+		taskWorkDir, _ := cmd.Flags().GetString("work-dir")
+		taskClaudeBin, _ := cmd.Flags().GetString("claude-bin")
+
+		// Auto-detect from registry if not provided.
+		if taskServer == "" || taskProxyToken == "" || taskSandboxID == "" {
+			reg, err := agent.LoadRegistry(agent.DefaultRegistryPath())
+			if err == nil && len(reg.Entries) > 0 {
+				entry := reg.Entries[0] // use first entry
+				if taskServer == "" {
+					taskServer = entry.Server
+				}
+				if taskSandboxID == "" {
+					taskSandboxID = entry.SandboxID
+				}
+				if taskProxyToken == "" {
+					taskProxyToken = entry.TunnelToken
+				}
+			}
+		}
+
+		if taskServer == "" || taskSandboxID == "" {
+			fmt.Fprintln(os.Stderr, "Error: --server and --sandbox-id are required (or a valid registry entry)")
+			os.Exit(1)
+		}
+
+		if taskWorkDir == "" {
+			taskWorkDir, _ = os.Getwd()
+		}
+
+		agent.RunTaskWorker(agent.TaskWorkerOptions{
+			ServerURL:  taskServer,
+			ProxyToken: taskProxyToken,
+			SandboxID:  taskSandboxID,
+			Workdir:    taskWorkDir,
+			CLIPath:    taskClaudeBin,
+		})
+	},
+}
+
 var versionCmd = &cobra.Command{
 	Use:   "version",
 	Short: "Print the agent version",
@@ -194,7 +244,7 @@ var versionCmd = &cobra.Command{
 }
 
 func init() {
-	rootCmd.AddCommand(connectCmd, claudecodeCmd, listCmd, removeCmd, versionCmd)
+	rootCmd.AddCommand(connectCmd, claudecodeCmd, listCmd, removeCmd, taskWorkerCmd, versionCmd)
 
 	connectCmd.Flags().StringVar(&server, "server", "", "Agent server URL (e.g., https://cli.example.com)")
 	connectCmd.Flags().StringVar(&code, "code", "", "One-time registration code from Web UI")
@@ -211,6 +261,12 @@ func init() {
 	claudecodeCmd.Flags().StringVar(&name, "name", "", "Name for this agent (default: hostname)")
 	claudecodeCmd.Flags().StringVar(&claudeBin, "claude-bin", "claude", "Path to the claude binary")
 	claudecodeCmd.Flags().StringVar(&claudeWorkDir, "work-dir", "", "Working directory for Claude Code (default: current directory)")
+
+	taskWorkerCmd.Flags().String("server", "", "Agent server URL")
+	taskWorkerCmd.Flags().String("proxy-token", "", "Sandbox proxy token")
+	taskWorkerCmd.Flags().String("sandbox-id", "", "Sandbox ID")
+	taskWorkerCmd.Flags().String("work-dir", "", "Working directory for task execution (default: current)")
+	taskWorkerCmd.Flags().String("claude-bin", "claude", "Path to the claude binary")
 
 	removeCmd.Flags().String("workspace", "", "Workspace ID of the agent to remove")
 	removeCmd.Flags().String("dir", "", "Directory of the agent to remove (default: current directory)")
