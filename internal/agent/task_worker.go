@@ -136,24 +136,27 @@ func (w *TaskWorker) ExecuteTask(ctx context.Context, taskID, prompt, systemCont
 	return nil
 }
 
-// RunTaskWorker starts the task worker that polls for tasks.
-func RunTaskWorker(opts TaskWorkerOptions) {
+// RunTaskWorker starts the task worker that polls for tasks. Blocks until ctx is cancelled.
+func RunTaskWorker(ctx context.Context, opts TaskWorkerOptions) {
 	log.Printf("task-worker: starting (server=%s, sandbox=%s)", opts.ServerURL, opts.SandboxID)
 	worker := NewTaskWorker(opts)
 
-	ctx := context.Background()
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
 	for {
 		select {
+		case <-ctx.Done():
+			return
 		case <-ticker.C:
-			// Poll for pending tasks assigned to this sandbox.
 			tasks, err := worker.pollTasks(ctx)
 			if err != nil {
 				continue
 			}
 			for _, task := range tasks {
+				if ctx.Err() != nil {
+					return
+				}
 				if err := worker.ExecuteTask(ctx, task.ID, task.Prompt, task.SystemContext, task.MaxTurns, task.MaxBudgetUSD); err != nil {
 					log.Printf("task-worker: task %s failed: %v", task.ID, err)
 					worker.reportTaskFailure(ctx, task.ID, err.Error())
@@ -163,6 +166,41 @@ func RunTaskWorker(opts TaskWorkerOptions) {
 			}
 		}
 	}
+}
+
+// RegisterDefaultCard registers a default agent card for a claudecode agent.
+func RegisterDefaultCard(serverURL, proxyToken, displayName string) error {
+	card := map[string]any{
+		"display_name": displayName,
+		"description":  "Claude Code agent with full coding, terminal, and search capabilities",
+		"agent_type":   "claudecode",
+		"card": map[string]any{
+			"skills": []map[string]string{
+				{"name": "code-editing", "description": "Read, write, and edit source code"},
+				{"name": "code-review", "description": "Review code for bugs and best practices"},
+				{"name": "terminal", "description": "Execute shell commands"},
+				{"name": "code-search", "description": "Search and navigate codebases"},
+			},
+			"tags": []string{"code", "terminal", "search"},
+		},
+	}
+	body, _ := json.Marshal(card)
+	req, err := http.NewRequest("POST", serverURL+"/api/agent/discovery/cards", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+proxyToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("register card: HTTP %d", resp.StatusCode)
+	}
+	return nil
 }
 
 type pollTask struct {

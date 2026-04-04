@@ -157,6 +157,22 @@ func RunClaudeCode(opts ClaudeCodeOptions) {
 		ptyMu.Unlock()
 	}()
 
+	// Auto-register agent card.
+	if err := RegisterDefaultCard(entry.Server, entry.TunnelToken, entry.Name); err != nil {
+		log.Printf("Warning: failed to register agent card: %v (will retry on reconnect)", err)
+	} else {
+		log.Printf("Agent card registered: %s", entry.Name)
+	}
+
+	// Start task worker in background.
+	go RunTaskWorker(ctx, TaskWorkerOptions{
+		ServerURL:  entry.Server,
+		ProxyToken: entry.TunnelToken,
+		SandboxID:  entry.SandboxID,
+		Workdir:    opts.WorkDir,
+		CLIPath:    opts.ClaudeBin,
+	})
+
 	log.Printf("Connecting to %s (Claude Code terminal agent)...", entry.Server)
 	if err := tunnelClient.Run(ctx); err != nil && ctx.Err() == nil {
 		log.Fatalf("Agent error: %v", err)

@@ -2,9 +2,12 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"text/tabwriter"
 
 	"github.com/agentserver/agentserver/internal/agent"
@@ -225,7 +228,15 @@ Requires --server and a valid sandbox registration (credentials from ~/.agentser
 			taskWorkDir, _ = os.Getwd()
 		}
 
-		agent.RunTaskWorker(agent.TaskWorkerOptions{
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		go func() {
+			sigCh := make(chan os.Signal, 1)
+			signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+			<-sigCh
+			cancel()
+		}()
+		agent.RunTaskWorker(ctx, agent.TaskWorkerOptions{
 			ServerURL:  taskServer,
 			ProxyToken: taskProxyToken,
 			SandboxID:  taskSandboxID,
