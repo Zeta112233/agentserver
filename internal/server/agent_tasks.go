@@ -208,7 +208,7 @@ func (s *Server) handlePollTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sbx, err := s.DB.GetSandboxByProxyToken(token)
+	sbx, err := s.DB.GetSandboxByAnyToken(token)
 	if err != nil || sbx == nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
@@ -271,10 +271,12 @@ func (s *Server) handleUpdateTaskStatus(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "missing authorization", http.StatusUnauthorized)
 		return
 	}
-	if _, err := s.DB.GetSandboxByProxyToken(token); err != nil {
+	sbx, err := s.DB.GetSandboxByAnyToken(token)
+	if err != nil || sbx == nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+	_ = sbx
 
 	taskID := chi.URLParam(r, "id")
 	var req struct {

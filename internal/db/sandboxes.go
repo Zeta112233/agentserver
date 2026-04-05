@@ -223,6 +223,31 @@ func (db *DB) GetSandboxByProxyToken(proxyToken string) (*Sandbox, error) {
 	return s, nil
 }
 
+// GetSandboxByAnyToken looks up a sandbox by proxy_token first, then tunnel_token.
+// This allows local agents (which only have tunnel_token) to authenticate
+// against HTTP APIs, mirroring CC's pattern where a single OAuth token
+// is used for both session creation and worker JWT exchange.
+func (db *DB) GetSandboxByAnyToken(token string) (*Sandbox, error) {
+	s, err := db.GetSandboxByProxyToken(token)
+	if err != nil {
+		return nil, err
+	}
+	if s != nil {
+		return s, nil
+	}
+	// Fallback: try tunnel_token.
+	s, err = scanSandbox(db.QueryRow(
+		`SELECT `+sandboxColumns+` FROM sandboxes WHERE tunnel_token = $1`, token,
+	))
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get sandbox by tunnel token: %w", err)
+	}
+	return s, nil
+}
+
 func nullIfEmpty(s string) interface{} {
 	if s == "" {
 		return nil

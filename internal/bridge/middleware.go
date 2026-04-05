@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/agentserver/agentserver/internal/db"
 )
 
 type contextKey string
@@ -80,7 +79,7 @@ func (h *Handler) AgentOrUserAuthMiddleware(userAuth func(http.Handler) http.Han
 			token := extractBearerToken(r)
 			if token != "" {
 				// Try proxy_token auth: look up sandbox by token.
-				sbx, err := h.DB.GetSandboxByProxyToken(token)
+				sbx, err := h.DB.GetSandboxByAnyToken(token)
 				if err == nil && sbx != nil {
 					ctx := r.Context()
 					ctx = context.WithValue(ctx, ctxSandboxID, sbx.ID)
@@ -104,5 +103,3 @@ func extractBearerToken(r *http.Request) string {
 	return ""
 }
 
-// GetSandboxByProxyToken is expected on *db.DB. Check it exists.
-var _ = (*db.DB)(nil)

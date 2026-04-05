@@ -19,7 +19,7 @@ type AgentTask struct {
 	Prompt          string
 	SystemContext   sql.NullString
 	Status          string
-	ResultJSON      json.RawMessage
+	ResultJSON      *json.RawMessage
 	FailureReason   sql.NullString
 	TimeoutSeconds  int
 	DelegationChain []string

@@ -90,7 +90,7 @@ func (s *Server) handleRegisterAgentCard(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	sbx, err := s.DB.GetSandboxByProxyToken(token)
+	sbx, err := s.DB.GetSandboxByAnyToken(token)
 	if err != nil || sbx == nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
