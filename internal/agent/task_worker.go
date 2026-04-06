@@ -109,13 +109,14 @@ func (w *TaskWorker) ExecuteTask(ctx context.Context, taskID, prompt, systemCont
 	for stream.Next() {
 		msg := stream.Current()
 
-		// Forward eligible messages through bridge.
-		msgData, err := json.Marshal(msg)
-		if err != nil {
+		// Use msg.Raw — the original JSON from claude CLI.
+		// json.Marshal(msg) would lose content because Raw and Subtype are tagged json:"-".
+		raw := msg.Raw
+		if len(raw) == 0 {
 			continue
 		}
 
-		if writeErr := bridge.WriteBatch([]json.RawMessage{msgData}); writeErr != nil {
+		if writeErr := bridge.WriteBatch([]json.RawMessage{raw}); writeErr != nil {
 			log.Printf("task-worker: bridge write error: %v", writeErr)
 		}
 	}
@@ -125,7 +126,7 @@ func (w *TaskWorker) ExecuteTask(ctx context.Context, taskID, prompt, systemCont
 		return fmt.Errorf("query execution: %w", err)
 	}
 
-	// 7. Send final result if available.
+	// 7. Send final result — also use Raw.
 	if result, err := stream.Result(); err == nil && result != nil {
 		resultData, _ := json.Marshal(result)
 		bridge.WriteBatch([]json.RawMessage{resultData})
