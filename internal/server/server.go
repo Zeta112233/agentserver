@@ -181,7 +181,6 @@ func (s *Server) Router() http.Handler {
 		hydraProxy := newReverseProxy(s.HydraPublicURL)
 		r.Post("/api/oauth/device/auth", hydraProxy)
 		r.Post("/api/oauth/token", hydraProxy)
-		r.Get("/api/oauth/device", hydraProxy) // device verification page
 	}
 
 	// Agent card registration (auth via proxy_token).
