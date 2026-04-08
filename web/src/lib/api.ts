@@ -619,17 +619,6 @@ export async function getWorkspaceTraceDetail(workspaceId: string, traceId: stri
   return res.json()
 }
 
-// Agent registration code API
-
-export async function createAgentCode(workspaceId: string): Promise<{ code: string; expires_at: string }> {
-  const res = await fetch(`/api/workspaces/${workspaceId}/agent-code`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-  })
-  if (!res.ok) throw new Error('Failed to create agent code')
-  return res.json()
-}
-
 // Admin API
 
 export interface AdminUser {

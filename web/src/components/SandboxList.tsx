@@ -7,7 +7,6 @@ import {
   deleteSandbox,
   pauseSandbox,
   resumeSandbox,
-  createAgentCode,
 } from '../lib/api'
 import { CreateSandboxModal } from './CreateSandboxModal'
 import { ConfirmModal } from './Modals'
@@ -54,7 +53,7 @@ export function SandboxList({
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState<{ id: string; name: string } | null>(null)
   const [confirmPause, setConfirmPause] = useState<{ id: string; name: string } | null>(null)
-  const [agentCodeData, setAgentCodeData] = useState<{ code: string; expires_at: string; opencodeCommand: string; claudecodeCommand: string } | null>(null)
+  const [showAgentConnect, setShowAgentConnect] = useState(false)
   const [quotaError, setQuotaError] = useState<string | null>(null)
 
   // Poll when any sandbox is in a transitional state.
@@ -166,19 +165,7 @@ export function SandboxList({
         </div>
         <div className="flex gap-1">
           <button
-            onClick={async () => {
-              if (!selectedWorkspaceId) return
-              try {
-                const data = await createAgentCode(selectedWorkspaceId)
-                const serverUrl = window.location.origin
-                const opencodeCommand = `agentserver connect --server ${serverUrl} --code ${data.code} --name "My PC"`
-                const claudecodeCommand = `agentserver claudecode --server ${serverUrl} --code ${data.code} --name "My PC"`
-                setAgentCodeData({ ...data, opencodeCommand, claudecodeCommand })
-              } catch {
-                // ignore
-              }
-            }}
-            disabled={!selectedWorkspaceId}
+            onClick={() => setShowAgentConnect(true)}
             className="rounded p-1 hover:bg-[var(--secondary)] disabled:opacity-50"
             title="Connect local agent"
           >
@@ -303,8 +290,8 @@ export function SandboxList({
         />
       )}
 
-      {agentCodeData && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setAgentCodeData(null)}>
+      {showAgentConnect && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setShowAgentConnect(false)}>
           <div
             className="w-full max-w-xl rounded-lg border border-[var(--border)] bg-[var(--card)] p-6 shadow-xl"
             onClick={(e) => e.stopPropagation()}
@@ -366,40 +353,32 @@ export function SandboxList({
                   <div className="mt-1 w-px flex-1 bg-[var(--border)]" />
                 </div>
                 <div className="pb-5">
-                  <p className="text-sm font-semibold text-[var(--foreground)]">Run Command</p>
+                  <p className="text-sm font-semibold text-[var(--foreground)]">Login & Register</p>
                   <p className="mt-1.5 text-sm text-[var(--muted-foreground)]">
-                    Pick one and run on your local machine:
+                    Run the following command on your local machine. A browser window will open for you to sign in and select a workspace.
                   </p>
                   <div className="mt-2 flex flex-col gap-2">
-                    <div>
-                      <p className="text-xs font-medium text-[var(--muted-foreground)] mb-1">OpenCode (Web IDE)</p>
-                      <div className="relative rounded-md bg-[var(--secondary)] p-3">
-                        <code className="block whitespace-pre-wrap break-all text-xs text-[var(--foreground)]">
-                          {agentCodeData.opencodeCommand}
-                        </code>
-                        <button
-                          onClick={() => navigator.clipboard.writeText(agentCodeData.opencodeCommand)}
-                          className="absolute right-2 top-2 rounded px-2 py-1 text-xs text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
-                        >
-                          Copy
-                        </button>
-                      </div>
-                    </div>
-                    <div>
-                      <p className="text-xs font-medium text-[var(--muted-foreground)] mb-1">Claude Code (Terminal)</p>
-                      <div className="relative rounded-md bg-[var(--secondary)] p-3">
-                        <code className="block whitespace-pre-wrap break-all text-xs text-[var(--foreground)]">
-                          {agentCodeData.claudecodeCommand}
-                        </code>
-                        <button
-                          onClick={() => navigator.clipboard.writeText(agentCodeData.claudecodeCommand)}
-                          className="absolute right-2 top-2 rounded px-2 py-1 text-xs text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
-                        >
-                          Copy
-                        </button>
-                      </div>
-                    </div>
+                    {(() => {
+                      const serverUrl = window.location.origin
+                      const loginCommand = `agentserver-agent login --server ${serverUrl} --hydra-url ${serverUrl.replace(/:\d+$/, '')}:4444`
+                      return (
+                        <div className="relative rounded-md bg-[var(--secondary)] p-3">
+                          <code className="block whitespace-pre-wrap break-all text-xs text-[var(--foreground)]">
+                            {loginCommand}
+                          </code>
+                          <button
+                            onClick={() => navigator.clipboard.writeText(loginCommand)}
+                            className="absolute right-2 top-2 rounded px-2 py-1 text-xs text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
+                          >
+                            Copy
+                          </button>
+                        </div>
+                      )
+                    })()}
                   </div>
+                  <p className="mt-2 text-xs text-[var(--muted-foreground)]">
+                    If the browser doesn't open automatically, the CLI will display a URL and QR code for manual access.
+                  </p>
                 </div>
               </div>
 
@@ -413,7 +392,7 @@ export function SandboxList({
                 <div>
                   <p className="text-sm font-semibold text-[var(--foreground)]">Done</p>
                   <p className="mt-1.5 text-xs text-[var(--muted-foreground)]">
-                    Code expires at {new Date(agentCodeData.expires_at).toLocaleString()}. It can only be used once.
+                    After authentication, the agent will be automatically registered in your chosen workspace and start connecting.
                   </p>
                 </div>
               </div>
@@ -421,7 +400,7 @@ export function SandboxList({
 
             <div className="flex justify-end mt-5">
               <button
-                onClick={() => setAgentCodeData(null)}
+                onClick={() => setShowAgentConnect(false)}
                 className="rounded-md border border-[var(--border)] px-4 py-2 text-sm font-medium text-[var(--foreground)] hover:bg-[var(--secondary)]"
               >
                 Close
