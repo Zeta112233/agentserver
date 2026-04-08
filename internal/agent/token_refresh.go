@@ -37,7 +37,7 @@ func ensureValidCredentials(entry *RegistryEntry, credPath, regPath string, ping
 		return ErrNeedReLogin
 	}
 
-	newToken, err := refreshAccessToken(creds.HydraURL, creds.RefreshToken)
+	newToken, err := refreshAccessToken(entry.Server, creds.RefreshToken)
 	if err != nil {
 		return ErrNeedReLogin
 	}

@@ -14,7 +14,6 @@ import (
 // ConnectOptions holds all flags for the connect command.
 type ConnectOptions struct {
 	Server          string
-	HydraURL        string
 	Name            string
 	WorkspaceID     string // optional: disambiguate when dir has multiple workspaces
 	SkipOpenBrowser bool
@@ -52,14 +51,10 @@ func RunConnect(opts ConnectOptions) {
 		if opts.Server == "" {
 			log.Fatal("--server is required for registration")
 		}
-		if opts.HydraURL == "" {
-			log.Fatal("--hydra-url is required for registration")
-		}
 		locked.Close() // Release lock during interactive login.
 
 		if err := RunLogin(LoginOptions{
 			ServerURL:       opts.Server,
-			HydraPublicURL:  opts.HydraURL,
 			Name:            opts.Name,
 			Type:            "opencode",
 			SkipOpenBrowser: opts.SkipOpenBrowser,

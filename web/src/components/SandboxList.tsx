@@ -360,7 +360,7 @@ export function SandboxList({
                   <div className="mt-2 flex flex-col gap-2">
                     {(() => {
                       const serverUrl = window.location.origin
-                      const loginCommand = `agentserver-agent login --server ${serverUrl} --hydra-url ${serverUrl.replace(/:\d+$/, '')}:4444`
+                      const loginCommand = `agentserver-agent login --server ${serverUrl}`
                       return (
                         <div className="relative rounded-md bg-[var(--secondary)] p-3">
                           <code className="block whitespace-pre-wrap break-all text-xs text-[var(--foreground)]">

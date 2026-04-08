@@ -16,7 +16,6 @@ import (
 // ClaudeCodeOptions holds all flags for the claudecode command.
 type ClaudeCodeOptions struct {
 	Server          string
-	HydraURL        string
 	Name            string
 	SkipOpenBrowser bool
 	ClaudeBin       string
@@ -59,14 +58,10 @@ func RunClaudeCode(opts ClaudeCodeOptions) {
 		if opts.Server == "" {
 			log.Fatal("--server is required for registration")
 		}
-		if opts.HydraURL == "" {
-			log.Fatal("--hydra-url is required for registration")
-		}
 		locked.Close()
 
 		if err := RunLogin(LoginOptions{
 			ServerURL:       opts.Server,
-			HydraPublicURL:  opts.HydraURL,
 			Name:            opts.Name,
 			Type:            "claudecode",
 			SkipOpenBrowser: opts.SkipOpenBrowser,

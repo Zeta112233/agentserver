@@ -15,8 +15,7 @@ func TestSaveAndLoadCredentials(t *testing.T) {
 		AccessToken:  "test-access-token",
 		RefreshToken: "test-refresh-token",
 		ExpiresAt:    time.Date(2026, 4, 7, 12, 0, 0, 0, time.UTC),
-		HydraURL:     "https://auth.example.com",
-		Scopes:       []string{"openid", "profile", "agent:register"},
+			Scopes:       []string{"openid", "profile", "agent:register"},
 	}
 
 	if err := SaveCredentials(path, creds); err != nil {
@@ -36,9 +35,6 @@ func TestSaveAndLoadCredentials(t *testing.T) {
 	}
 	if !loaded.ExpiresAt.Equal(creds.ExpiresAt) {
 		t.Errorf("ExpiresAt = %v, want %v", loaded.ExpiresAt, creds.ExpiresAt)
-	}
-	if loaded.HydraURL != creds.HydraURL {
-		t.Errorf("HydraURL = %q, want %q", loaded.HydraURL, creds.HydraURL)
 	}
 }
 
@@ -67,8 +63,7 @@ func TestSaveCredentials_CreatesDir(t *testing.T) {
 		AccessToken:  "tok",
 		RefreshToken: "ref",
 		ExpiresAt:    time.Now(),
-		HydraURL:     "https://auth.example.com",
-	}
+		}
 
 	if err := SaveCredentials(nested, creds); err != nil {
 		t.Fatalf("SaveCredentials: %v", err)

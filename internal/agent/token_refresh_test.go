@@ -61,7 +61,6 @@ func TestEnsureValidCredentials_AlreadyValid(t *testing.T) {
 		AccessToken:  "tok",
 		RefreshToken: "ref",
 		ExpiresAt:    time.Now().Add(time.Hour),
-		HydraURL:     "https://auth.example.com",
 	})
 
 	entry := &RegistryEntry{

@@ -21,7 +21,6 @@ const defaultScopes = "openid profile agent:register"
 // LoginOptions holds flags for the login command.
 type LoginOptions struct {
 	ServerURL       string
-	HydraPublicURL  string
 	Name            string
 	Type            string // "opencode" or "claudecode"
 	SkipOpenBrowser bool
@@ -60,9 +59,6 @@ func RunLogin(opts LoginOptions) error {
 	if opts.ServerURL == "" {
 		return fmt.Errorf("--server is required")
 	}
-	if opts.HydraPublicURL == "" {
-		return fmt.Errorf("--hydra-url is required")
-	}
 	if opts.Name == "" {
 		hostname, _ := os.Hostname()
 		if hostname != "" {
@@ -75,8 +71,8 @@ func RunLogin(opts LoginOptions) error {
 		opts.Type = "claudecode"
 	}
 
-	// 1. Request device authorization.
-	deviceResp, err := requestDeviceCode(opts.HydraPublicURL)
+	// 1. Request device authorization (via agentserver reverse proxy).
+	deviceResp, err := requestDeviceCode(opts.ServerURL)
 	if err != nil {
 		return fmt.Errorf("device authorization failed: %w", err)
 	}
@@ -103,7 +99,7 @@ func RunLogin(opts LoginOptions) error {
 
 	// 4. Poll for token.
 	fmt.Println("Waiting for authentication...")
-	tokenResp, err := pollForToken(opts.HydraPublicURL, deviceResp)
+	tokenResp, err := pollForToken(opts.ServerURL, deviceResp)
 	if err != nil {
 		return fmt.Errorf("authentication failed: %w", err)
 	}
@@ -121,7 +117,6 @@ func RunLogin(opts LoginOptions) error {
 		AccessToken:  tokenResp.AccessToken,
 		RefreshToken: tokenResp.RefreshToken,
 		ExpiresAt:    time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second),
-		HydraURL:     opts.HydraPublicURL,
 		Scopes:       strings.Split(tokenResp.Scope, " "),
 	}); err != nil {
 		log.Printf("Warning: failed to save credentials: %v", err)

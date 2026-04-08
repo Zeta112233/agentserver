@@ -13,7 +13,6 @@ type Credentials struct {
 	AccessToken  string    `json:"accessToken"`
 	RefreshToken string    `json:"refreshToken"`
 	ExpiresAt    time.Time `json:"expiresAt"`
-	HydraURL     string    `json:"hydraUrl"`
 	Scopes       []string  `json:"scopes,omitempty"`
 }
 

@@ -30,7 +30,6 @@ var (
 	claudeWorkDir string
 
 	// OAuth Device Flow flags.
-	hydraURL        string
 	skipOpenBrowser bool
 	agentType       string
 )
@@ -54,7 +53,6 @@ Use --auto-start=false to disable this and manage opencode manually.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		agent.RunConnect(agent.ConnectOptions{
 			Server:          server,
-			HydraURL:        hydraURL,
 			Name:            name,
 			WorkspaceID:     workspaceID,
 			SkipOpenBrowser: skipOpenBrowser,
@@ -186,7 +184,6 @@ On subsequent runs, saved credentials are used automatically.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		agent.RunClaudeCode(agent.ClaudeCodeOptions{
 			Server:          server,
-			HydraURL:        hydraURL,
 			Name:            name,
 			SkipOpenBrowser: skipOpenBrowser,
 			ClaudeBin:       claudeBin,
@@ -282,7 +279,6 @@ and QR code for manual login.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		if err := agent.RunLogin(agent.LoginOptions{
 			ServerURL:       server,
-			HydraPublicURL:  hydraURL,
 			Name:            name,
 			Type:            agentType,
 			SkipOpenBrowser: skipOpenBrowser,
@@ -304,14 +300,12 @@ var versionCmd = &cobra.Command{
 func init() {
 	rootCmd.AddCommand(connectCmd, claudecodeCmd, loginCmd, listCmd, removeCmd, taskWorkerCmd, mcpServerCmd, versionCmd)
 
-	loginCmd.Flags().StringVar(&server, "server", "", "Agent server URL (e.g., https://cli.example.com)")
-	loginCmd.Flags().StringVar(&hydraURL, "hydra-url", "", "Hydra public URL (e.g., https://auth.example.com)")
+	loginCmd.Flags().StringVar(&server, "server", "", "Agent server URL (e.g., https://agent.cs.ac.cn)")
 	loginCmd.Flags().StringVar(&name, "name", "", "Name for this agent (default: hostname)")
 	loginCmd.Flags().StringVar(&agentType, "type", "claudecode", "Agent type: opencode or claudecode")
 	loginCmd.Flags().BoolVar(&skipOpenBrowser, "skip-open-browser", false, "Don't auto-open browser, show URL + QR only")
 
-	connectCmd.Flags().StringVar(&server, "server", "", "Agent server URL (e.g., https://cli.example.com)")
-	connectCmd.Flags().StringVar(&hydraURL, "hydra-url", "", "Hydra public URL for OAuth login")
+	connectCmd.Flags().StringVar(&server, "server", "", "Agent server URL (e.g., https://agent.cs.ac.cn)")
 	connectCmd.Flags().StringVar(&name, "name", "", "Name for this agent (default: hostname)")
 	connectCmd.Flags().StringVar(&workspaceID, "workspace", "", "Workspace ID to connect to")
 	connectCmd.Flags().BoolVar(&skipOpenBrowser, "skip-open-browser", false, "Don't auto-open browser, show URL + QR only")
@@ -321,8 +315,7 @@ func init() {
 	connectCmd.Flags().StringVar(&opencodeBin, "opencode-bin", "opencode", "Path to the opencode binary")
 	connectCmd.Flags().IntVar(&opencodePort, "opencode-port", 4096, "Port to start opencode on")
 
-	claudecodeCmd.Flags().StringVar(&server, "server", "", "Agent server URL (e.g., https://cli.example.com)")
-	claudecodeCmd.Flags().StringVar(&hydraURL, "hydra-url", "", "Hydra public URL for OAuth login")
+	claudecodeCmd.Flags().StringVar(&server, "server", "", "Agent server URL (e.g., https://agent.cs.ac.cn)")
 	claudecodeCmd.Flags().StringVar(&name, "name", "", "Name for this agent (default: hostname)")
 	claudecodeCmd.Flags().BoolVar(&skipOpenBrowser, "skip-open-browser", false, "Don't auto-open browser, show URL + QR only")
 	claudecodeCmd.Flags().StringVar(&claudeBin, "claude-bin", "claude", "Path to the claude binary")
