@@ -177,10 +177,10 @@ func (s *Server) Router() http.Handler {
 	}
 
 	// Reverse proxy Hydra public endpoints so CLI only needs the agentserver URL.
+	// Rewrites /api/oauth/* → /oauth2/* on the Hydra side.
 	if s.HydraPublicURL != "" {
-		hydraProxy := newReverseProxy(s.HydraPublicURL)
-		r.Post("/api/oauth/device/auth", hydraProxy)
-		r.Post("/api/oauth/token", hydraProxy)
+		r.Post("/api/oauth/device/auth", s.hydraProxyRewrite("/oauth2/device/auth"))
+		r.Post("/api/oauth/token", s.hydraProxyRewrite("/oauth2/token"))
 	}
 
 	// Agent card registration (auth via proxy_token).
@@ -1813,6 +1813,26 @@ func newReverseProxy(baseURL string) http.HandlerFunc {
 		},
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
+		proxy.ServeHTTP(w, r)
+	}
+}
+
+// hydraProxyRewrite returns a handler that proxies to Hydra with a rewritten path.
+func (s *Server) hydraProxyRewrite(targetPath string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		target, err := url.Parse(s.HydraPublicURL)
+		if err != nil {
+			http.Error(w, "hydra not configured", http.StatusServiceUnavailable)
+			return
+		}
+		proxy := &httputil.ReverseProxy{
+			Director: func(req *http.Request) {
+				req.URL.Scheme = target.Scheme
+				req.URL.Host = target.Host
+				req.URL.Path = targetPath
+				req.Host = target.Host
+			},
+		}
 		proxy.ServeHTTP(w, r)
 	}
 }
