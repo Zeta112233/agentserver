@@ -1,6 +1,8 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Login } from './Login'
 import { submitOAuthLogin } from '../lib/api'
+
+const PENDING_LOGIN_CHALLENGE_KEY = 'agentserver_pending_login_challenge'
 
 interface OAuthLoginProps {
   challenge: string
@@ -9,8 +11,14 @@ interface OAuthLoginProps {
 export function OAuthLogin({ challenge }: OAuthLoginProps) {
   const [error, setError] = useState('')
 
+  // Persist challenge in sessionStorage so it survives OIDC redirects.
+  useEffect(() => {
+    sessionStorage.setItem(PENDING_LOGIN_CHALLENGE_KEY, challenge)
+  }, [challenge])
+
   const handleLoginSuccess = async () => {
     try {
+      sessionStorage.removeItem(PENDING_LOGIN_CHALLENGE_KEY)
       const { redirect_to } = await submitOAuthLogin(challenge)
       window.location.href = redirect_to
     } catch {
@@ -35,3 +43,6 @@ export function OAuthLogin({ challenge }: OAuthLoginProps) {
     </div>
   )
 }
+
+// Exported for App.tsx to check after OIDC redirect.
+export { PENDING_LOGIN_CHALLENGE_KEY }

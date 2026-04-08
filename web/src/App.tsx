@@ -8,6 +8,7 @@ import {
   getMe,
   pauseSandbox,
   resumeSandbox,
+  submitOAuthLogin,
   deleteSandbox,
   type Workspace,
   type Sandbox,
@@ -107,9 +108,21 @@ export default function App() {
   }, [selectedWorkspaceId])
 
   useEffect(() => {
-    checkAuth().then((ok) => {
+    checkAuth().then(async (ok) => {
       setAuthed(ok)
       if (ok) {
+        // After OIDC login redirect, complete any pending OAuth login challenge.
+        const pendingChallenge = sessionStorage.getItem('agentserver_pending_login_challenge')
+        if (pendingChallenge) {
+          sessionStorage.removeItem('agentserver_pending_login_challenge')
+          try {
+            const { redirect_to } = await submitOAuthLogin(pendingChallenge)
+            window.location.href = redirect_to
+            return
+          } catch {
+            // Challenge expired or invalid, continue to normal app.
+          }
+        }
         listWorkspaces().then((ws) => {
           setWorkspaces(ws)
           // Use workspace ID from URL if valid, otherwise default to first

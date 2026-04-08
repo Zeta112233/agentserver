@@ -219,11 +219,14 @@ func registerAgentWithToken(serverURL, accessToken, name, agentType string) (*Re
 
 func showQRCode(url string) {
 	config := qrterminal.Config{
-		Level:     qrterminal.L,
-		Writer:    os.Stderr,
-		BlackChar: qrterminal.BLACK,
-		WhiteChar: qrterminal.WHITE,
-		QuietZone: 1,
+		Level:          qrterminal.L,
+		Writer:         os.Stderr,
+		HalfBlocks:     true,
+		BlackChar:      qrterminal.BLACK_BLACK,
+		BlackWhiteChar: qrterminal.BLACK_WHITE,
+		WhiteBlackChar: qrterminal.WHITE_BLACK,
+		WhiteChar:      qrterminal.WHITE_WHITE,
+		QuietZone:      1,
 	}
 	qrterminal.GenerateWithConfig(url, config)
 }
