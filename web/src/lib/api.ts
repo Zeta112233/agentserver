@@ -863,3 +863,35 @@ export async function adminDeleteWorkspaceLLMQuota(workspaceId: string): Promise
   const res = await fetch(`/api/admin/workspaces/${workspaceId}/llm-quota`, { method: 'DELETE' })
   if (!res.ok) throw new Error('Failed to delete LLM quota')
 }
+
+// --- OAuth Device Flow ---
+
+export async function listMyWorkspaces(): Promise<Workspace[]> {
+  const res = await fetch('/api/workspaces', { credentials: 'include' })
+  if (!res.ok) throw new Error('Failed to list workspaces')
+  return res.json()
+}
+
+export async function submitOAuthLogin(loginChallenge: string): Promise<{ redirect_to: string }> {
+  const res = await fetch(`/oauth/login?login_challenge=${encodeURIComponent(loginChallenge)}`, {
+    method: 'POST',
+    credentials: 'include',
+  })
+  if (!res.ok) throw new Error('Failed to submit login')
+  return res.json()
+}
+
+export async function submitOAuthConsent(
+  consentChallenge: string,
+  workspaceId: string,
+  action: 'accept' | 'deny'
+): Promise<{ redirect_to: string }> {
+  const res = await fetch(`/oauth/consent?consent_challenge=${encodeURIComponent(consentChallenge)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ workspace_id: workspaceId, action }),
+  })
+  if (!res.ok) throw new Error('Failed to submit consent')
+  return res.json()
+}

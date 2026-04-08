@@ -13,6 +13,8 @@ import {
   type Sandbox,
 } from './lib/api'
 import { Login } from './components/Login'
+import { OAuthConsent } from './components/OAuthConsent'
+import { OAuthLogin } from './components/OAuthLogin'
 import { TopBar } from './components/TopBar'
 import { SandboxList } from './components/SandboxList'
 import { SandboxDetail } from './components/SandboxDetail'
@@ -63,6 +65,20 @@ function SandboxDetailRoute({
 export default function App() {
   const navigate = useNavigate()
   const location = useLocation()
+
+  // Check for OAuth flow query params.
+  const searchParams = new URLSearchParams(location.search)
+  const oauthLoginChallenge = searchParams.get('oauth_login_challenge')
+  const oauthConsentChallenge = searchParams.get('oauth_consent_challenge')
+
+  // Render OAuth pages if we're in an OAuth flow.
+  if (oauthLoginChallenge) {
+    return <OAuthLogin challenge={oauthLoginChallenge} />
+  }
+  if (oauthConsentChallenge) {
+    return <OAuthConsent challenge={oauthConsentChallenge} />
+  }
+
   const [authed, setAuthed] = useState<boolean | null>(null)
   const [user, setUser] = useState<UserInfo | null>(null)
   const [workspaces, setWorkspaces] = useState<Workspace[]>([])
