@@ -63,7 +63,8 @@ type Server struct {
 	DatabaseURL                  string // PostgreSQL connection URL (needed for Matrix E2EE crypto DB)
 
 	// Hydra OAuth2 (for agent Device Flow)
-	HydraClient *auth.HydraClient
+	HydraClient    *auth.HydraClient
+	HydraPublicURL string // internal URL for reverse proxy (e.g. "http://hydra-public:4444")
 
 	// BridgeHandler provides CCR V2-compatible bridge API for agent sessions.
 	BridgeHandler *bridge.Handler
@@ -173,6 +174,15 @@ func (s *Server) Router() http.Handler {
 		r.Post("/oauth/login", s.handleOAuthLoginSubmit)
 		r.Get("/oauth/consent", s.handleOAuthConsent)
 		r.Post("/oauth/consent", s.handleOAuthConsentSubmit)
+	}
+
+	// Reverse proxy Hydra public endpoints so CLI only needs the agentserver URL.
+	if s.HydraPublicURL != "" {
+		hydraProxy := newReverseProxy(s.HydraPublicURL)
+		r.Post("/oauth2/device/auth", hydraProxy)
+		r.Post("/oauth2/token", hydraProxy)
+		r.Get("/oauth2/device", hydraProxy)         // device verification page
+		r.Get("/.well-known/openid-configuration", hydraProxy)
 	}
 
 	// Agent card registration (auth via proxy_token).

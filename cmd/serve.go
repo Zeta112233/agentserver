@@ -229,6 +229,7 @@ var serveCmd = &cobra.Command{
 		hydraPublicURL := os.Getenv("HYDRA_PUBLIC_URL")
 		if hydraAdminURL != "" && hydraPublicURL != "" {
 			srv.HydraClient = auth.NewHydraClient(hydraAdminURL, hydraPublicURL)
+			srv.HydraPublicURL = hydraPublicURL
 			log.Printf("Hydra OAuth2: admin=%s public=%s", hydraAdminURL, hydraPublicURL)
 		}
 
