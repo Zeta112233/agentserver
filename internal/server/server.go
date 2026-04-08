@@ -179,10 +179,9 @@ func (s *Server) Router() http.Handler {
 	// Reverse proxy Hydra public endpoints so CLI only needs the agentserver URL.
 	if s.HydraPublicURL != "" {
 		hydraProxy := newReverseProxy(s.HydraPublicURL)
-		r.Post("/oauth2/device/auth", hydraProxy)
-		r.Post("/oauth2/token", hydraProxy)
-		r.Get("/oauth2/device", hydraProxy)         // device verification page
-		r.Get("/.well-known/openid-configuration", hydraProxy)
+		r.Post("/api/oauth/device/auth", hydraProxy)
+		r.Post("/api/oauth/token", hydraProxy)
+		r.Get("/api/oauth/device", hydraProxy) // device verification page
 	}
 
 	// Agent card registration (auth via proxy_token).

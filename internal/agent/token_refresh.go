@@ -73,7 +73,7 @@ func ensureValidCredentials(entry *RegistryEntry, credPath, regPath string, ping
 }
 
 func refreshAccessToken(serverURL, refreshToken string) (*TokenResponse, error) {
-	tokenURL := strings.TrimRight(serverURL, "/") + "/oauth2/token"
+	tokenURL := strings.TrimRight(serverURL, "/") + "/api/oauth/token"
 	form := url.Values{
 		"grant_type":    {"refresh_token"},
 		"client_id":     {defaultClientID},
