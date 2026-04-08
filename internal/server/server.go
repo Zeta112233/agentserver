@@ -62,6 +62,9 @@ type Server struct {
 	ModelserverProxyURL           string
 	DatabaseURL                  string // PostgreSQL connection URL (needed for Matrix E2EE crypto DB)
 
+	// Hydra OAuth2 (for agent Device Flow)
+	HydraClient *auth.HydraClient
+
 	// BridgeHandler provides CCR V2-compatible bridge API for agent sessions.
 	BridgeHandler *bridge.Handler
 }
@@ -161,8 +164,16 @@ func (s *Server) Router() http.Handler {
 		r.Post("/api/internal/nanoclaw/{id}/weixin/send", imbridgeProxy) // legacy alias
 	}
 
-	// Agent registration (auth via one-time code, no cookie auth needed).
+	// Agent registration (auth via OAuth Bearer token).
 	r.Post("/api/agent/register", s.handleAgentRegister)
+
+	// Hydra login/consent provider endpoints (no auth required — Hydra redirects here).
+	if s.HydraClient != nil {
+		r.Get("/oauth/login", s.handleOAuthLogin)
+		r.Post("/oauth/login", s.handleOAuthLoginSubmit)
+		r.Get("/oauth/consent", s.handleOAuthConsent)
+		r.Post("/oauth/consent", s.handleOAuthConsentSubmit)
+	}
 
 	// Agent card registration (auth via proxy_token).
 	r.Post("/api/agent/discovery/cards", s.handleRegisterAgentCard)

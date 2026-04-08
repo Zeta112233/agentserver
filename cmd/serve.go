@@ -224,6 +224,14 @@ var serveCmd = &cobra.Command{
 		srv.ModelserverOAuthRedirectURI = os.Getenv("MODELSERVER_OAUTH_REDIRECT_URI")
 		srv.ModelserverProxyURL = os.Getenv("MODELSERVER_PROXY_URL")
 
+		// Hydra OAuth2 for agent Device Flow.
+		hydraAdminURL := os.Getenv("HYDRA_ADMIN_URL")
+		hydraPublicURL := os.Getenv("HYDRA_PUBLIC_URL")
+		if hydraAdminURL != "" && hydraPublicURL != "" {
+			srv.HydraClient = auth.NewHydraClient(hydraAdminURL, hydraPublicURL)
+			log.Printf("Hydra OAuth2: admin=%s public=%s", hydraAdminURL, hydraPublicURL)
+		}
+
 		// Bridge handler (CCR V2 compatible)
 		bridgeJWTSecret := os.Getenv("BRIDGE_JWT_SECRET")
 		if bridgeJWTSecret == "" {
