@@ -32,6 +32,7 @@ var (
 	// OAuth Device Flow flags.
 	hydraURL        string
 	skipOpenBrowser bool
+	agentType       string
 )
 
 var rootCmd = &cobra.Command{
@@ -283,7 +284,7 @@ and QR code for manual login.`,
 			ServerURL:       server,
 			HydraPublicURL:  hydraURL,
 			Name:            name,
-			Type:            "claudecode",
+			Type:            agentType,
 			SkipOpenBrowser: skipOpenBrowser,
 		}); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -306,6 +307,7 @@ func init() {
 	loginCmd.Flags().StringVar(&server, "server", "", "Agent server URL (e.g., https://cli.example.com)")
 	loginCmd.Flags().StringVar(&hydraURL, "hydra-url", "", "Hydra public URL (e.g., https://auth.example.com)")
 	loginCmd.Flags().StringVar(&name, "name", "", "Name for this agent (default: hostname)")
+	loginCmd.Flags().StringVar(&agentType, "type", "claudecode", "Agent type: opencode or claudecode")
 	loginCmd.Flags().BoolVar(&skipOpenBrowser, "skip-open-browser", false, "Don't auto-open browser, show URL + QR only")
 
 	connectCmd.Flags().StringVar(&server, "server", "", "Agent server URL (e.g., https://cli.example.com)")

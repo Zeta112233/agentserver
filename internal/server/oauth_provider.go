@@ -114,6 +114,13 @@ func (s *Server) handleOAuthConsentSubmit(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// Verify the caller has a valid session.
+	sessionUserID, ok := s.Auth.ValidateRequest(r)
+	if !ok {
+		http.Error(w, "not authenticated", http.StatusUnauthorized)
+		return
+	}
+
 	var req struct {
 		WorkspaceID string `json:"workspace_id"`
 		Action      string `json:"action"` // "accept" or "deny"
@@ -143,6 +150,12 @@ func (s *Server) handleOAuthConsentSubmit(w http.ResponseWriter, r *http.Request
 	if err != nil {
 		log.Printf("oauth consent submit: get consent request: %v", err)
 		http.Error(w, "failed to get consent request", http.StatusInternalServerError)
+		return
+	}
+
+	// Verify session user matches the OAuth subject (defense in depth).
+	if consentReq.Subject != sessionUserID {
+		http.Error(w, "session user does not match OAuth subject", http.StatusForbidden)
 		return
 	}
 

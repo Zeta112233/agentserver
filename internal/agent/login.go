@@ -238,10 +238,13 @@ func pollForToken(hydraPublicURL string, deviceResp *DeviceAuthResponse) (*Token
 }
 
 func registerAgentWithToken(serverURL, accessToken, name, agentType string) (*RegisterResponse, error) {
-	reqBody := fmt.Sprintf(`{"name":%q,"type":%q}`, name, agentType)
+	bodyData, err := json.Marshal(map[string]string{"name": name, "type": agentType})
+	if err != nil {
+		return nil, fmt.Errorf("marshal register body: %w", err)
+	}
 	req, err := http.NewRequest(http.MethodPost,
 		strings.TrimRight(serverURL, "/")+"/api/agent/register",
-		strings.NewReader(reqBody))
+		strings.NewReader(string(bodyData)))
 	if err != nil {
 		return nil, err
 	}

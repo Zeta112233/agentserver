@@ -103,6 +103,15 @@ func RunConnect(opts ConnectOptions) {
 		entry.Server = opts.Server
 	}
 
+	// Assign opencode port if not yet set (new registration via RunLogin doesn't set it).
+	if entry.OpencodePort == 0 && !opts.OpencodePortSet {
+		entry.OpencodePort = reg.NextPort()
+		reg.Put(entry)
+		if err := locked.Save(); err != nil {
+			log.Printf("Warning: failed to save port assignment: %v", err)
+		}
+	}
+
 	// Determine opencode port: command-line override or entry value.
 	opencodePort := entry.OpencodePort
 	if opts.OpencodePortSet {

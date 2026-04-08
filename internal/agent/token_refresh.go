@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -53,7 +55,9 @@ func ensureValidCredentials(entry *RegistryEntry, credPath, regPath string, ping
 	locked, lockErr := LockRegistry(regPath)
 	if lockErr == nil {
 		locked.Reg.Put(entry)
-		locked.Save()
+		if err := locked.Save(); err != nil {
+			log.Printf("warning: failed to persist refreshed registry: %v", err)
+		}
 		locked.Close()
 	}
 
@@ -61,15 +65,21 @@ func ensureValidCredentials(entry *RegistryEntry, credPath, regPath string, ping
 	creds.AccessToken = newToken.AccessToken
 	creds.RefreshToken = newToken.RefreshToken
 	creds.ExpiresAt = time.Now().Add(time.Duration(newToken.ExpiresIn) * time.Second)
-	SaveCredentials(credPath, creds)
+	if err := SaveCredentials(credPath, creds); err != nil {
+		log.Printf("warning: failed to persist refreshed credentials: %v", err)
+	}
 
 	return nil
 }
 
 func refreshAccessToken(hydraPublicURL, refreshToken string) (*TokenResponse, error) {
 	tokenURL := strings.TrimRight(hydraPublicURL, "/") + "/oauth2/token"
-	form := "grant_type=refresh_token&client_id=" + defaultClientID + "&refresh_token=" + refreshToken
-	resp, err := http.Post(tokenURL, "application/x-www-form-urlencoded", strings.NewReader(form))
+	form := url.Values{
+		"grant_type":    {"refresh_token"},
+		"client_id":     {defaultClientID},
+		"refresh_token": {refreshToken},
+	}
+	resp, err := http.PostForm(tokenURL, form)
 	if err != nil {
 		return nil, fmt.Errorf("refresh token request: %w", err)
 	}
