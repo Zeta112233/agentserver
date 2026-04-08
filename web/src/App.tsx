@@ -16,7 +16,7 @@ import {
 import { Login } from './components/Login'
 import { OAuthConsent } from './components/OAuthConsent'
 import { OAuthDevice } from './components/OAuthDevice'
-import { OAuthLogin } from './components/OAuthLogin'
+import { OAuthLogin, PENDING_LOGIN_CHALLENGE_KEY } from './components/OAuthLogin'
 import { TopBar } from './components/TopBar'
 import { SandboxList } from './components/SandboxList'
 import { SandboxDetail } from './components/SandboxDetail'
@@ -112,9 +112,9 @@ export default function App() {
       setAuthed(ok)
       if (ok) {
         // After OIDC login redirect, complete any pending OAuth login challenge.
-        const pendingChallenge = sessionStorage.getItem('agentserver_pending_login_challenge')
+        const pendingChallenge = sessionStorage.getItem(PENDING_LOGIN_CHALLENGE_KEY)
         if (pendingChallenge) {
-          sessionStorage.removeItem('agentserver_pending_login_challenge')
+          sessionStorage.removeItem(PENDING_LOGIN_CHALLENGE_KEY)
           try {
             const { redirect_to } = await submitOAuthLogin(pendingChallenge)
             window.location.href = redirect_to

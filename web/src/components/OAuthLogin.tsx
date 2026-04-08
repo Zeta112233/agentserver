@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { Login } from './Login'
 import { submitOAuthLogin } from '../lib/api'
 
@@ -12,9 +12,9 @@ export function OAuthLogin({ challenge }: OAuthLoginProps) {
   const [error, setError] = useState('')
 
   // Persist challenge in sessionStorage so it survives OIDC redirects.
-  useEffect(() => {
-    sessionStorage.setItem(PENDING_LOGIN_CHALLENGE_KEY, challenge)
-  }, [challenge])
+  // Written synchronously (not in useEffect) to ensure it's saved before
+  // the user can click an OIDC link that navigates away.
+  sessionStorage.setItem(PENDING_LOGIN_CHALLENGE_KEY, challenge)
 
   const handleLoginSuccess = async () => {
     try {
