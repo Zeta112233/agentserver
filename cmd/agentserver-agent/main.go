@@ -29,6 +29,10 @@ var (
 	// Claude Code specific flags.
 	claudeBin     string
 	claudeWorkDir string
+
+	// OAuth Device Flow flags.
+	hydraURL        string
+	skipOpenBrowser bool
 )
 
 var rootCmd = &cobra.Command{
@@ -265,6 +269,28 @@ Required environment variables:
 	},
 }
 
+var loginCmd = &cobra.Command{
+	Use:   "login",
+	Short: "Authenticate and register this agent with agentserver",
+	Long: `Authenticate with agentserver using OAuth Device Flow and register this
+machine as a local agent in a workspace of your choice.
+
+Opens a browser for authentication. If browser is unavailable, displays a URL
+and QR code for manual login.`,
+	Run: func(cmd *cobra.Command, args []string) {
+		if err := agent.RunLogin(agent.LoginOptions{
+			ServerURL:       server,
+			HydraPublicURL:  hydraURL,
+			Name:            name,
+			Type:            "claudecode",
+			SkipOpenBrowser: skipOpenBrowser,
+		}); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+	},
+}
+
 var versionCmd = &cobra.Command{
 	Use:   "version",
 	Short: "Print the agent version",
@@ -274,7 +300,12 @@ var versionCmd = &cobra.Command{
 }
 
 func init() {
-	rootCmd.AddCommand(connectCmd, claudecodeCmd, listCmd, removeCmd, taskWorkerCmd, mcpServerCmd, versionCmd)
+	rootCmd.AddCommand(connectCmd, claudecodeCmd, loginCmd, listCmd, removeCmd, taskWorkerCmd, mcpServerCmd, versionCmd)
+
+	loginCmd.Flags().StringVar(&server, "server", "", "Agent server URL (e.g., https://cli.example.com)")
+	loginCmd.Flags().StringVar(&hydraURL, "hydra-url", "", "Hydra public URL (e.g., https://auth.example.com)")
+	loginCmd.Flags().StringVar(&name, "name", "", "Name for this agent (default: hostname)")
+	loginCmd.Flags().BoolVar(&skipOpenBrowser, "skip-open-browser", false, "Don't auto-open browser, show URL + QR only")
 
 	connectCmd.Flags().StringVar(&server, "server", "", "Agent server URL (e.g., https://cli.example.com)")
 	connectCmd.Flags().StringVar(&code, "code", "", "One-time registration code from Web UI")

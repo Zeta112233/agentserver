@@ -11,6 +11,8 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/yamux v0.1.2
 	github.com/lib/pq v1.11.2
+	github.com/mdp/qrterminal/v3 v3.2.1
+	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c
 	github.com/shirou/gopsutil/v4 v4.26.2
 	github.com/spf13/cobra v1.10.2
 	github.com/yuin/goldmark v1.8.2
@@ -27,6 +29,8 @@ require (
 	sigs.k8s.io/agent-sandbox v0.1.1
 	sigs.k8s.io/controller-runtime v0.23.1
 )
+
+require rsc.io/qr v0.2.0 // indirect
 
 require (
 	filippo.io/edwards25519 v1.2.0 // indirect
