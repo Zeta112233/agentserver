@@ -1820,21 +1820,21 @@ func newReverseProxy(baseURL string) http.HandlerFunc {
 }
 
 // hydraProxyRewrite returns a handler that proxies to Hydra with a rewritten path.
+// URL is parsed once at init time; invalid URL causes a fatal startup error.
 func (s *Server) hydraProxyRewrite(targetPath string) http.HandlerFunc {
+	target, err := url.Parse(s.HydraPublicURL)
+	if err != nil {
+		log.Fatalf("invalid Hydra public URL %q: %v", s.HydraPublicURL, err)
+	}
+	proxy := &httputil.ReverseProxy{
+		Director: func(req *http.Request) {
+			req.URL.Scheme = target.Scheme
+			req.URL.Host = target.Host
+			req.URL.Path = targetPath
+			req.Host = target.Host
+		},
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		target, err := url.Parse(s.HydraPublicURL)
-		if err != nil {
-			http.Error(w, "hydra not configured", http.StatusServiceUnavailable)
-			return
-		}
-		proxy := &httputil.ReverseProxy{
-			Director: func(req *http.Request) {
-				req.URL.Scheme = target.Scheme
-				req.URL.Host = target.Host
-				req.URL.Path = targetPath
-				req.Host = target.Host
-			},
-		}
 		proxy.ServeHTTP(w, r)
 	}
 }
