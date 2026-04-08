@@ -10,6 +10,7 @@ import (
 
 // Credentials holds OAuth tokens for the authenticated user.
 type Credentials struct {
+	ServerURL    string    `json:"serverUrl,omitempty"`
 	AccessToken  string    `json:"accessToken"`
 	RefreshToken string    `json:"refreshToken"`
 	ExpiresAt    time.Time `json:"expiresAt"`

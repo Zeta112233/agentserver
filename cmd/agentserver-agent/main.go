@@ -18,7 +18,6 @@ import (
 var (
 	server        string
 	name          string
-	workspaceID   string
 	opencodeURL   string
 	opencodeToken string
 	autoStart     bool
@@ -29,15 +28,33 @@ var (
 	claudeBin     string
 	claudeWorkDir string
 
-	// OAuth Device Flow flags.
+	// Session flags.
 	skipOpenBrowser bool
-	agentType       string
+	resumeID       string
+	continueFlag   bool
 )
 
 var rootCmd = &cobra.Command{
 	Use:   "agentserver",
-	Short: "Connect local opencode to agentserver",
-	Long:  `Lightweight agent client that connects a local opencode instance to agentserver via a WebSocket tunnel.`,
+	Short: "Connect local Claude Code agent to agentserver",
+	Long: `Authenticate and connect a local Claude Code instance to agentserver.
+
+On first run, authenticates via OAuth Device Flow and registers a new agent.
+On subsequent runs, reuses saved credentials and creates a new session.
+
+Use --resume <sandbox-id> to reconnect to a previous session,
+or -c/--continue to resume the most recent one.`,
+	Run: func(cmd *cobra.Command, args []string) {
+		agent.RunClaudeCode(agent.ClaudeCodeOptions{
+			Server:          server,
+			Name:            name,
+			SkipOpenBrowser: skipOpenBrowser,
+			ClaudeBin:       claudeBin,
+			WorkDir:         claudeWorkDir,
+			Resume:          resumeID,
+			Continue:        continueFlag,
+		})
+	},
 }
 
 var connectCmd = &cobra.Command{
@@ -45,8 +62,8 @@ var connectCmd = &cobra.Command{
 	Short: "Connect local opencode to agentserver",
 	Long: `Establish a WebSocket tunnel between a local opencode instance and agentserver.
 
-On first run, provide --server to authenticate and register via OAuth.
-On subsequent runs, the saved credentials will be used automatically.
+On first run, authenticates via OAuth and registers a new agent.
+On subsequent runs, reuses saved credentials and creates a new session.
 
 By default, opencode serve is started automatically on --opencode-port (4096).
 Use --auto-start=false to disable this and manage opencode manually.`,
@@ -54,8 +71,9 @@ Use --auto-start=false to disable this and manage opencode manually.`,
 		agent.RunConnect(agent.ConnectOptions{
 			Server:          server,
 			Name:            name,
-			WorkspaceID:     workspaceID,
 			SkipOpenBrowser: skipOpenBrowser,
+			Resume:          resumeID,
+			Continue:        continueFlag,
 			OpencodeURL:     opencodeURL,
 			OpencodeURLSet:  cmd.Flags().Changed("opencode-url"),
 			OpencodeToken:   opencodeToken,
@@ -69,27 +87,32 @@ Use --auto-start=false to disable this and manage opencode manually.`,
 
 var listCmd = &cobra.Command{
 	Use:   "list",
-	Short: "List all registered agents",
+	Short: "List all sessions",
 	Run: func(cmd *cobra.Command, args []string) {
-		reg, err := agent.LoadRegistry(agent.DefaultRegistryPath())
+		sessions, err := agent.ListSessions()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
 
-		if len(reg.Entries) == 0 {
-			fmt.Println("No agents registered.")
+		if len(sessions) == 0 {
+			fmt.Println("No sessions.")
 			return
 		}
 
 		w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-		fmt.Fprintln(w, "DIRECTORY\tNAME\tWORKSPACE\tPORT\tSANDBOX")
-		for _, e := range reg.Entries {
-			dir := e.Dir
-			if len(dir) > 40 {
-				dir = "..." + dir[len(dir)-37:]
+		fmt.Fprintln(w, "SANDBOX\tNAME\tTYPE\tWORKSPACE\tDIRECTORY\tACTIVE")
+		for _, s := range sessions {
+			dir := s.Dir
+			if len(dir) > 35 {
+				dir = "..." + dir[len(dir)-32:]
 			}
-			fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\n", dir, e.Name, e.WorkspaceID, e.OpencodePort, e.SandboxID)
+			active := ""
+			if agent.IsSessionActive(s) {
+				active = fmt.Sprintf("PID %d", s.PID)
+			}
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
+				s.SandboxID[:8], s.Name, s.Type, s.WorkspaceID[:8], dir, active)
 		}
 		w.Flush()
 	},
@@ -176,11 +199,10 @@ var claudecodeCmd = &cobra.Command{
 	Use:   "claudecode",
 	Short: "Connect local Claude Code terminal to agentserver",
 	Long: `Register a local Claude Code instance with agentserver and expose its terminal
-via WebSocket tunnel. Users can access the terminal through the web browser at
-claude-{id}.{domain}.
+via WebSocket tunnel.
 
-On first run, provide --server to authenticate and register via OAuth.
-On subsequent runs, saved credentials are used automatically.`,
+On first run, authenticates via OAuth and registers a new agent.
+On subsequent runs, reuses saved credentials and creates a new session.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		agent.RunClaudeCode(agent.ClaudeCodeOptions{
 			Server:          server,
@@ -188,17 +210,33 @@ On subsequent runs, saved credentials are used automatically.`,
 			SkipOpenBrowser: skipOpenBrowser,
 			ClaudeBin:       claudeBin,
 			WorkDir:         claudeWorkDir,
+			Resume:          resumeID,
+			Continue:        continueFlag,
 		})
+	},
+}
+
+var loginCmd = &cobra.Command{
+	Use:   "login",
+	Short: "Authenticate with agentserver via OAuth Device Flow",
+	Long: `Authenticate with agentserver using OAuth Device Flow.
+
+Opens a browser for authentication. If browser is unavailable, displays a URL
+and QR code for manual login. Saves credentials for future use.`,
+	Run: func(cmd *cobra.Command, args []string) {
+		if err := agent.RunLogin(agent.LoginOptions{
+			ServerURL:       server,
+			SkipOpenBrowser: skipOpenBrowser,
+		}); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
 	},
 }
 
 var taskWorkerCmd = &cobra.Command{
 	Use:   "task-worker",
 	Short: "Run as a task worker that polls and executes delegated tasks",
-	Long: `Start a background task worker that polls agentserver for delegated tasks
-and executes them using the Claude Agent SDK.
-
-Requires --server and a valid sandbox registration (credentials from ~/.agentserver/registry.json).`,
 	Run: func(cmd *cobra.Command, args []string) {
 		taskServer, _ := cmd.Flags().GetString("server")
 		taskProxyToken, _ := cmd.Flags().GetString("proxy-token")
@@ -206,11 +244,10 @@ Requires --server and a valid sandbox registration (credentials from ~/.agentser
 		taskWorkDir, _ := cmd.Flags().GetString("work-dir")
 		taskClaudeBin, _ := cmd.Flags().GetString("claude-bin")
 
-		// Auto-detect from registry if not provided.
 		if taskServer == "" || taskProxyToken == "" || taskSandboxID == "" {
 			reg, err := agent.LoadRegistry(agent.DefaultRegistryPath())
 			if err == nil && len(reg.Entries) > 0 {
-				entry := reg.Entries[0] // use first entry
+				entry := reg.Entries[0]
 				if taskServer == "" {
 					taskServer = entry.Server
 				}
@@ -253,39 +290,8 @@ Requires --server and a valid sandbox registration (credentials from ~/.agentser
 var mcpServerCmd = &cobra.Command{
 	Use:   "mcp-server",
 	Short: "Run as an MCP stdio server for Claude Code integration",
-	Long: `Start a stdio MCP server that exposes agentserver agent discovery and
-task delegation as tools for Claude Code.
-
-Typically invoked automatically via .mcp.json — not run manually.
-
-Required environment variables:
-  AGENTSERVER_URL          - agentserver base URL
-  AGENTSERVER_TOKEN        - tunnel_token for auth
-  AGENTSERVER_WORKSPACE_ID - workspace ID
-  AGENTSERVER_SANDBOX_ID   - this agent's sandbox ID (optional)`,
 	Run: func(cmd *cobra.Command, args []string) {
 		mcpbridge.RunMCPServer()
-	},
-}
-
-var loginCmd = &cobra.Command{
-	Use:   "login",
-	Short: "Authenticate and register this agent with agentserver",
-	Long: `Authenticate with agentserver using OAuth Device Flow and register this
-machine as a local agent in a workspace of your choice.
-
-Opens a browser for authentication. If browser is unavailable, displays a URL
-and QR code for manual login.`,
-	Run: func(cmd *cobra.Command, args []string) {
-		if err := agent.RunLogin(agent.LoginOptions{
-			ServerURL:       server,
-			Name:            name,
-			Type:            agentType,
-			SkipOpenBrowser: skipOpenBrowser,
-		}); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
 	},
 }
 
@@ -300,35 +306,50 @@ var versionCmd = &cobra.Command{
 func init() {
 	rootCmd.AddCommand(connectCmd, claudecodeCmd, loginCmd, listCmd, removeCmd, taskWorkerCmd, mcpServerCmd, versionCmd)
 
-	loginCmd.Flags().StringVar(&server, "server", "", "Agent server URL (e.g., https://agent.cs.ac.cn)")
-	loginCmd.Flags().StringVar(&name, "name", "", "Name for this agent (default: hostname)")
-	loginCmd.Flags().StringVar(&agentType, "type", "claudecode", "Agent type: opencode or claudecode")
+	// Root command flags (default: Claude Code agent).
+	rootCmd.Flags().StringVar(&server, "server", "https://agent.cs.ac.cn", "Agent server URL")
+	rootCmd.Flags().StringVar(&name, "name", "", "Name for this agent (default: hostname)")
+	rootCmd.Flags().BoolVar(&skipOpenBrowser, "skip-open-browser", false, "Don't auto-open browser, show URL + QR only")
+	rootCmd.Flags().StringVar(&claudeBin, "claude-bin", "claude", "Path to the claude binary")
+	rootCmd.Flags().StringVar(&claudeWorkDir, "work-dir", "", "Working directory (default: current directory)")
+	rootCmd.Flags().StringVarP(&resumeID, "resume", "r", "", "Resume a previous session by sandbox ID")
+	rootCmd.Flags().BoolVarP(&continueFlag, "continue", "c", false, "Resume the most recent session")
+
+	// Login command flags.
+	loginCmd.Flags().StringVar(&server, "server", "https://agent.cs.ac.cn", "Agent server URL")
 	loginCmd.Flags().BoolVar(&skipOpenBrowser, "skip-open-browser", false, "Don't auto-open browser, show URL + QR only")
 
-	connectCmd.Flags().StringVar(&server, "server", "", "Agent server URL (e.g., https://agent.cs.ac.cn)")
+	// Connect command flags.
+	connectCmd.Flags().StringVar(&server, "server", "", "Agent server URL")
 	connectCmd.Flags().StringVar(&name, "name", "", "Name for this agent (default: hostname)")
-	connectCmd.Flags().StringVar(&workspaceID, "workspace", "", "Workspace ID to connect to")
 	connectCmd.Flags().BoolVar(&skipOpenBrowser, "skip-open-browser", false, "Don't auto-open browser, show URL + QR only")
-	connectCmd.Flags().StringVar(&opencodeURL, "opencode-url", "", "Local opencode server URL (default: http://localhost:{opencode-port})")
+	connectCmd.Flags().StringVarP(&resumeID, "resume", "r", "", "Resume a previous session by sandbox ID")
+	connectCmd.Flags().BoolVarP(&continueFlag, "continue", "c", false, "Resume the most recent session")
+	connectCmd.Flags().StringVar(&opencodeURL, "opencode-url", "", "Local opencode server URL")
 	connectCmd.Flags().StringVar(&opencodeToken, "opencode-token", "", "Local opencode server token")
 	connectCmd.Flags().BoolVar(&autoStart, "auto-start", true, "Automatically start opencode serve")
 	connectCmd.Flags().StringVar(&opencodeBin, "opencode-bin", "opencode", "Path to the opencode binary")
 	connectCmd.Flags().IntVar(&opencodePort, "opencode-port", 4096, "Port to start opencode on")
 
-	claudecodeCmd.Flags().StringVar(&server, "server", "", "Agent server URL (e.g., https://agent.cs.ac.cn)")
+	// Claudecode command flags.
+	claudecodeCmd.Flags().StringVar(&server, "server", "", "Agent server URL")
 	claudecodeCmd.Flags().StringVar(&name, "name", "", "Name for this agent (default: hostname)")
 	claudecodeCmd.Flags().BoolVar(&skipOpenBrowser, "skip-open-browser", false, "Don't auto-open browser, show URL + QR only")
 	claudecodeCmd.Flags().StringVar(&claudeBin, "claude-bin", "claude", "Path to the claude binary")
-	claudecodeCmd.Flags().StringVar(&claudeWorkDir, "work-dir", "", "Working directory for Claude Code (default: current directory)")
+	claudecodeCmd.Flags().StringVar(&claudeWorkDir, "work-dir", "", "Working directory (default: current directory)")
+	claudecodeCmd.Flags().StringVarP(&resumeID, "resume", "r", "", "Resume a previous session by sandbox ID")
+	claudecodeCmd.Flags().BoolVarP(&continueFlag, "continue", "c", false, "Resume the most recent session")
 
+	// Task worker flags.
 	taskWorkerCmd.Flags().String("server", "", "Agent server URL")
 	taskWorkerCmd.Flags().String("proxy-token", "", "Sandbox proxy token")
 	taskWorkerCmd.Flags().String("sandbox-id", "", "Sandbox ID")
-	taskWorkerCmd.Flags().String("work-dir", "", "Working directory for task execution (default: current)")
+	taskWorkerCmd.Flags().String("work-dir", "", "Working directory for task execution")
 	taskWorkerCmd.Flags().String("claude-bin", "claude", "Path to the claude binary")
 
+	// Remove command flags.
 	removeCmd.Flags().String("workspace", "", "Workspace ID of the agent to remove")
-	removeCmd.Flags().String("dir", "", "Directory of the agent to remove (default: current directory)")
+	removeCmd.Flags().String("dir", "", "Directory of the agent to remove")
 	removeCmd.Flags().BoolP("yes", "y", false, "Skip confirmation prompt")
 }
 

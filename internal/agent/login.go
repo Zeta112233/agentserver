@@ -21,8 +21,6 @@ const defaultScopes = "openid profile agent:register"
 // LoginOptions holds flags for the login command.
 type LoginOptions struct {
 	ServerURL       string
-	Name            string
-	Type            string // "opencode" or "claudecode"
 	SkipOpenBrowser bool
 }
 
@@ -59,17 +57,6 @@ func RunLogin(opts LoginOptions) error {
 	if opts.ServerURL == "" {
 		return fmt.Errorf("--server is required")
 	}
-	if opts.Name == "" {
-		hostname, _ := os.Hostname()
-		if hostname != "" {
-			opts.Name = hostname
-		} else {
-			opts.Name = "Local Agent"
-		}
-	}
-	if opts.Type == "" {
-		opts.Type = "claudecode"
-	}
 
 	// 1. Request device authorization (via agentserver reverse proxy).
 	deviceResp, err := requestDeviceCode(opts.ServerURL)
@@ -103,51 +90,19 @@ func RunLogin(opts LoginOptions) error {
 	}
 	fmt.Println("Authentication successful!")
 
-	// 5. Register agent with access_token.
-	regResp, err := registerAgentWithToken(opts.ServerURL, tokenResp.AccessToken, opts.Name, opts.Type)
-	if err != nil {
-		return fmt.Errorf("agent registration failed: %w", err)
-	}
-
-	// 6. Save credentials.
+	// 5. Save credentials (with server URL for later use).
 	credPath := DefaultCredentialsPath()
 	if err := SaveCredentials(credPath, &Credentials{
+		ServerURL:    opts.ServerURL,
 		AccessToken:  tokenResp.AccessToken,
 		RefreshToken: tokenResp.RefreshToken,
 		ExpiresAt:    time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second),
 		Scopes:       strings.Split(tokenResp.Scope, " "),
 	}); err != nil {
-		log.Printf("Warning: failed to save credentials: %v", err)
+		return fmt.Errorf("save credentials: %w", err)
 	}
 
-	// 7. Save registry entry.
-	cwd, err := os.Getwd()
-	if err != nil {
-		return fmt.Errorf("get working directory: %w", err)
-	}
-
-	locked, err := LockRegistry(DefaultRegistryPath())
-	if err != nil {
-		return fmt.Errorf("lock registry: %w", err)
-	}
-	defer locked.Close()
-
-	entry := &RegistryEntry{
-		Dir:         cwd,
-		Server:      opts.ServerURL,
-		SandboxID:   regResp.SandboxID,
-		TunnelToken: regResp.TunnelToken,
-		WorkspaceID: regResp.WorkspaceID,
-		Name:        opts.Name,
-		Type:        opts.Type,
-	}
-	locked.Reg.Put(entry)
-	if err := locked.Save(); err != nil {
-		return fmt.Errorf("save registry: %w", err)
-	}
-
-	fmt.Printf("Registered as '%s' in workspace '%s' (sandbox: %s)\n",
-		opts.Name, regResp.WorkspaceID, regResp.SandboxID)
+	fmt.Println("Login successful! Credentials saved.")
 	return nil
 }
 

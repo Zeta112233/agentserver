@@ -15,110 +15,112 @@ import (
 type ConnectOptions struct {
 	Server          string
 	Name            string
-	WorkspaceID     string // optional: disambiguate when dir has multiple workspaces
 	SkipOpenBrowser bool
+	Resume          string // sandbox ID to resume
+	Continue        bool   // resume most recent session
 	OpencodeURL     string
 	OpencodeURLSet  bool // true if --opencode-url was explicitly provided
 	OpencodeToken   string
 	AutoStart       bool
 	OpencodeBin     string
-	OpencodePort    int  // 0 = auto-assign from registry
+	OpencodePort    int  // 0 = auto-assign
 	OpencodePortSet bool // true if --opencode-port was explicitly provided
 }
 
 // RunConnect executes the agent connect workflow.
+// Each invocation registers a new sandbox (or resumes an existing one).
 func RunConnect(opts ConnectOptions) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		log.Fatalf("Failed to get working directory: %v", err)
 	}
-
-	registryPath := DefaultRegistryPath()
-
-	// Lock registry for the read-modify-write cycle.
-	locked, err := LockRegistry(registryPath)
-	if err != nil {
-		log.Fatalf("Failed to load registry: %v", err)
+	if opts.Name == "" {
+		hostname, _ := os.Hostname()
+		if hostname != "" {
+			opts.Name = hostname
+		} else {
+			opts.Name = "Local Agent"
+		}
 	}
-	defer locked.Close()
 
-	reg := locked.Reg
+	var session *Session
 
-	// Check if we need to register (no saved credentials for this directory).
-	entries := reg.FindByDir(cwd)
-	if len(entries) == 0 {
-		// --- New registration via OAuth Device Flow ---
-		if opts.Server == "" {
-			log.Fatal("--server is required for registration")
-		}
-		locked.Close() // Release lock during interactive login.
-
-		if err := RunLogin(LoginOptions{
-			ServerURL:       opts.Server,
-			Name:            opts.Name,
-			Type:            "opencode",
-			SkipOpenBrowser: opts.SkipOpenBrowser,
-		}); err != nil {
-			log.Fatalf("Login failed: %v", err)
-		}
-
-		// Re-lock and reload registry.
-		locked, err = LockRegistry(registryPath)
+	// Resume mode.
+	if opts.Resume != "" {
+		s, err := LoadSession(opts.Resume)
 		if err != nil {
-			log.Fatalf("Failed to reload registry: %v", err)
+			log.Fatalf("Failed to load session: %v", err)
 		}
-		defer locked.Close()
-		reg = locked.Reg
-		entries = reg.FindByDir(cwd)
-		if len(entries) == 0 {
-			log.Fatal("Registration succeeded but no entry found in registry")
+		if isProcessAlive(s.PID) {
+			log.Fatalf("Session %s is still active (PID %d)", s.SandboxID, s.PID)
 		}
+		session = s
+		opts.Server = s.ServerURL
+		log.Printf("Resuming session (sandbox: %s)", session.SandboxID)
+	} else if opts.Continue {
+		s, err := FindLatestSession(cwd)
+		if err != nil {
+			log.Fatalf("No session to continue: %v", err)
+		}
+		session = s
+		opts.Server = s.ServerURL
+		log.Printf("Continuing session (sandbox: %s)", session.SandboxID)
 	}
 
-	// Select entry.
-	var entry *RegistryEntry
-	switch len(entries) {
-	case 1:
-		entry = entries[0]
-	default:
-		if opts.WorkspaceID == "" {
-			log.Printf("Multiple workspaces registered for this directory:")
-			for _, e := range entries {
-				log.Printf("  workspace=%s  name=%s  sandbox=%s", e.WorkspaceID, e.Name, e.SandboxID)
-			}
-			log.Fatal("Use --workspace to specify which one to connect.")
-		}
-		entry = reg.Find(cwd, opts.WorkspaceID)
-		if entry == nil {
-			log.Fatalf("No entry found for workspace %q in this directory", opts.WorkspaceID)
-		}
-	}
-	log.Printf("Using credentials (sandbox: %s)", entry.SandboxID)
-	if opts.Server != "" {
-		entry.Server = opts.Server
-	}
-
-	// Assign opencode port if not yet set (new registration via RunLogin doesn't set it).
-	if entry.OpencodePort == 0 && !opts.OpencodePortSet {
-		entry.OpencodePort = reg.NextPort()
-		reg.Put(entry)
-		if err := locked.Save(); err != nil {
-			log.Printf("Warning: failed to save port assignment: %v", err)
-		}
-	}
-
-	// Determine opencode port: command-line override or entry value.
-	opencodePort := entry.OpencodePort
-	if opts.OpencodePortSet {
-		opencodePort = opts.OpencodePort
-		// Persist the override so subsequent reconnects use the same port.
-		if entry.OpencodePort != opencodePort {
-			entry.OpencodePort = opencodePort
-			reg.Put(entry)
-			if err := locked.Save(); err != nil {
-				log.Printf("Warning: failed to save port override: %v", err)
+	// New session.
+	if session == nil {
+		if opts.Server == "" {
+			creds, _ := LoadCredentials(DefaultCredentialsPath())
+			if creds != nil && creds.ServerURL != "" {
+				opts.Server = creds.ServerURL
+			} else {
+				log.Fatal("--server is required (no saved credentials found)")
 			}
 		}
+
+		accessToken, err := EnsureValidToken(opts.Server)
+		if err != nil {
+			log.Println("No valid credentials, starting login...")
+			if err := RunLogin(LoginOptions{
+				ServerURL:       opts.Server,
+				SkipOpenBrowser: opts.SkipOpenBrowser,
+			}); err != nil {
+				log.Fatalf("Login failed: %v", err)
+			}
+			accessToken, err = EnsureValidToken(opts.Server)
+			if err != nil {
+				log.Fatalf("Failed to get access token after login: %v", err)
+			}
+		}
+
+		regResp, err := registerAgentWithToken(opts.Server, accessToken, opts.Name, "opencode")
+		if err != nil {
+			log.Fatalf("Agent registration failed: %v", err)
+		}
+		log.Printf("Registered new sandbox: %s", regResp.SandboxID)
+
+		session = &Session{
+			SandboxID:   regResp.SandboxID,
+			TunnelToken: regResp.TunnelToken,
+			ProxyToken:  regResp.ProxyToken,
+			WorkspaceID: regResp.WorkspaceID,
+			Name:        opts.Name,
+			Type:        "opencode",
+			ServerURL:   opts.Server,
+			Dir:         cwd,
+			CreatedAt:   time.Now(),
+		}
+	}
+
+	if err := SaveSession(session); err != nil {
+		log.Printf("Warning: failed to save session: %v", err)
+	}
+	defer CleanupSession(session)
+
+	// Determine opencode port.
+	opencodePort := opts.OpencodePort
+	if opencodePort == 0 {
+		opencodePort = 4096
 	}
 
 	// Auto-start opencode if requested.
@@ -126,7 +128,6 @@ func RunConnect(opts ConnectOptions) {
 	if opts.AutoStart {
 		opencodeURL := fmt.Sprintf("http://localhost:%d", opencodePort)
 
-		// Check if opencode is already listening.
 		client := &http.Client{Timeout: 2 * time.Second}
 		resp, err := client.Get(opencodeURL + "/")
 		if err == nil {
@@ -148,7 +149,6 @@ func RunConnect(opts ConnectOptions) {
 			readyCancel()
 		}
 
-		// Use the auto-started URL unless --opencode-url was explicitly set.
 		if !opts.OpencodeURLSet {
 			opts.OpencodeURL = opencodeURL
 		}
@@ -158,26 +158,23 @@ func RunConnect(opts ConnectOptions) {
 		opts.OpencodeURL = fmt.Sprintf("http://localhost:%d", opencodePort)
 	}
 
-	tunnelClient := NewClient(entry.Server, entry.SandboxID, entry.TunnelToken, opts.OpencodeURL, opts.OpencodeToken, cwd)
+	tunnelClient := NewClient(session.ServerURL, session.SandboxID, session.TunnelToken, opts.OpencodeURL, opts.OpencodeToken, cwd)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Handle graceful shutdown.
 	go func() {
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 		sig := <-sigCh
 		log.Printf("Received %v, disconnecting...", sig)
 		cancel()
-
-		// Stop opencode subprocess if we started it.
 		if opencodeProc != nil {
 			opencodeProc.Stop()
 		}
 	}()
 
-	log.Printf("Connecting to %s (forwarding to %s)...", entry.Server, opts.OpencodeURL)
+	log.Printf("Connecting to %s (forwarding to %s)...", session.ServerURL, opts.OpencodeURL)
 	if err := tunnelClient.Run(ctx); err != nil && ctx.Err() == nil {
 		if opencodeProc != nil {
 			opencodeProc.Stop()
@@ -185,9 +182,10 @@ func RunConnect(opts ConnectOptions) {
 		log.Fatalf("Agent error: %v", err)
 	}
 
-	// Clean up opencode on normal exit too.
 	if opencodeProc != nil {
 		opencodeProc.Stop()
 	}
-	log.Println("Agent disconnected.")
+
+	fmt.Println("Agent disconnected.")
+	fmt.Printf("To resume this session: agentserver connect --resume %s\n", session.SandboxID)
 }

@@ -2,7 +2,6 @@ package agent
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -52,47 +51,45 @@ func TestRefreshAccessToken_Failure(t *testing.T) {
 	}
 }
 
-func TestEnsureValidCredentials_AlreadyValid(t *testing.T) {
+func TestEnsureValidToken_ValidToken(t *testing.T) {
 	dir := t.TempDir()
 	credPath := filepath.Join(dir, ".credentials.json")
-	regPath := filepath.Join(dir, "registry.json")
 
 	SaveCredentials(credPath, &Credentials{
-		AccessToken:  "tok",
+		AccessToken:  "valid-token",
 		RefreshToken: "ref",
 		ExpiresAt:    time.Now().Add(time.Hour),
 	})
 
-	entry := &RegistryEntry{
-		Server:      "https://server.example.com",
-		SandboxID:   "sandbox-1",
-		TunnelToken: "tunnel-tok",
-	}
-
-	// pingFunc succeeds — credentials are valid.
-	err := ensureValidCredentials(entry, credPath, regPath, func(e *RegistryEntry) error {
-		return nil
-	})
+	token, err := ensureValidToken("https://server.example.com", credPath)
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
+	if token != "valid-token" {
+		t.Errorf("token = %q, want %q", token, "valid-token")
+	}
 }
 
-func TestEnsureValidCredentials_NeedReLogin(t *testing.T) {
+func TestEnsureValidToken_NoCredentials(t *testing.T) {
 	dir := t.TempDir()
 	credPath := filepath.Join(dir, ".credentials.json")
-	regPath := filepath.Join(dir, "registry.json")
 
-	// No credentials file — should need re-login.
-	entry := &RegistryEntry{
-		Server:      "https://server.example.com",
-		SandboxID:   "sandbox-1",
-		TunnelToken: "tunnel-tok",
+	_, err := ensureValidToken("https://server.example.com", credPath)
+	if err != ErrNeedReLogin {
+		t.Fatalf("expected ErrNeedReLogin, got: %v", err)
 	}
+}
 
-	err := ensureValidCredentials(entry, credPath, regPath, func(e *RegistryEntry) error {
-		return fmt.Errorf("401")
+func TestEnsureValidToken_ExpiredNoRefresh(t *testing.T) {
+	dir := t.TempDir()
+	credPath := filepath.Join(dir, ".credentials.json")
+
+	SaveCredentials(credPath, &Credentials{
+		AccessToken: "expired",
+		ExpiresAt:   time.Now().Add(-time.Hour),
 	})
+
+	_, err := ensureValidToken("https://server.example.com", credPath)
 	if err != ErrNeedReLogin {
 		t.Fatalf("expected ErrNeedReLogin, got: %v", err)
 	}

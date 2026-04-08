@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sync"
 	"syscall"
+	"time"
 )
 
 // ClaudeCodeOptions holds all flags for the claudecode command.
@@ -20,11 +21,13 @@ type ClaudeCodeOptions struct {
 	SkipOpenBrowser bool
 	ClaudeBin       string
 	WorkDir         string
+	Resume          string // sandbox ID to resume
+	Continue        bool   // resume most recent session
 }
 
 // RunClaudeCode executes the Claude Code agent connect workflow.
-// It registers with the server (or loads saved credentials), then establishes
-// a tunnel and bridges terminal streams to a local Claude Code PTY.
+// Each invocation registers a new sandbox (or resumes an existing one),
+// then establishes a tunnel and bridges terminal streams to a local Claude Code PTY.
 func RunClaudeCode(opts ClaudeCodeOptions) {
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -33,86 +36,104 @@ func RunClaudeCode(opts ClaudeCodeOptions) {
 	if opts.WorkDir == "" {
 		opts.WorkDir = cwd
 	}
-
-	registryPath := DefaultRegistryPath()
-
-	locked, err := LockRegistry(registryPath)
-	if err != nil {
-		log.Fatalf("Failed to load registry: %v", err)
-	}
-	defer locked.Close()
-
-	reg := locked.Reg
-
-	entries := reg.FindByDir(cwd)
-	// Filter to claudecode entries only.
-	var ccEntries []*RegistryEntry
-	for _, e := range entries {
-		if e.Type == "claudecode" {
-			ccEntries = append(ccEntries, e)
+	if opts.Name == "" {
+		hostname, _ := os.Hostname()
+		if hostname != "" {
+			opts.Name = hostname
+		} else {
+			opts.Name = "Claude Code Agent"
 		}
 	}
 
-	if len(ccEntries) == 0 {
-		// --- New registration via OAuth Device Flow ---
-		if opts.Server == "" {
-			log.Fatal("--server is required for registration")
-		}
-		locked.Close()
+	var session *Session
 
-		if err := RunLogin(LoginOptions{
-			ServerURL:       opts.Server,
-			Name:            opts.Name,
-			Type:            "claudecode",
-			SkipOpenBrowser: opts.SkipOpenBrowser,
-		}); err != nil {
-			log.Fatalf("Login failed: %v", err)
-		}
-
-		locked, err = LockRegistry(registryPath)
+	// Resume mode: load an existing session.
+	if opts.Resume != "" {
+		s, err := LoadSession(opts.Resume)
 		if err != nil {
-			log.Fatalf("Failed to reload registry: %v", err)
+			log.Fatalf("Failed to load session: %v", err)
 		}
-		defer locked.Close()
-		reg = locked.Reg
-		ccEntries = nil
-		for _, e := range reg.FindByDir(cwd) {
-			if e.Type == "claudecode" {
-				ccEntries = append(ccEntries, e)
+		if isProcessAlive(s.PID) {
+			log.Fatalf("Session %s is still active (PID %d)", s.SandboxID, s.PID)
+		}
+		session = s
+		opts.Server = s.ServerURL
+		log.Printf("Resuming session (sandbox: %s)", session.SandboxID)
+	} else if opts.Continue {
+		s, err := FindLatestSession(cwd)
+		if err != nil {
+			log.Fatalf("No session to continue: %v", err)
+		}
+		session = s
+		opts.Server = s.ServerURL
+		log.Printf("Continuing session (sandbox: %s)", session.SandboxID)
+	}
+
+	// New session: ensure login, register new sandbox.
+	if session == nil {
+		if opts.Server == "" {
+			// Try to get server URL from saved credentials.
+			creds, _ := LoadCredentials(DefaultCredentialsPath())
+			if creds != nil && creds.ServerURL != "" {
+				opts.Server = creds.ServerURL
+			} else {
+				log.Fatal("--server is required (no saved credentials found)")
 			}
 		}
-		if len(ccEntries) == 0 {
-			log.Fatal("Registration succeeded but no claudecode entry found")
+
+		// Ensure we have a valid access token.
+		accessToken, err := EnsureValidToken(opts.Server)
+		if err != nil {
+			// Need interactive login.
+			log.Println("No valid credentials, starting login...")
+			if err := RunLogin(LoginOptions{
+				ServerURL:       opts.Server,
+				SkipOpenBrowser: opts.SkipOpenBrowser,
+			}); err != nil {
+				log.Fatalf("Login failed: %v", err)
+			}
+			accessToken, err = EnsureValidToken(opts.Server)
+			if err != nil {
+				log.Fatalf("Failed to get access token after login: %v", err)
+			}
+		}
+
+		// Register a new sandbox.
+		regResp, err := registerAgentWithToken(opts.Server, accessToken, opts.Name, "claudecode")
+		if err != nil {
+			log.Fatalf("Agent registration failed: %v", err)
+		}
+		log.Printf("Registered new sandbox: %s", regResp.SandboxID)
+
+		session = &Session{
+			SandboxID:   regResp.SandboxID,
+			TunnelToken: regResp.TunnelToken,
+			ProxyToken:  regResp.ProxyToken,
+			WorkspaceID: regResp.WorkspaceID,
+			Name:        opts.Name,
+			Type:        "claudecode",
+			ServerURL:   opts.Server,
+			Dir:         cwd,
+			CreatedAt:   time.Now(),
 		}
 	}
 
-	var entry *RegistryEntry
-	switch len(ccEntries) {
-	case 1:
-		entry = ccEntries[0]
-	default:
-		log.Printf("Multiple Claude Code agents registered for this directory:")
-		for _, e := range ccEntries {
-			log.Printf("  workspace=%s  name=%s  sandbox=%s", e.WorkspaceID, e.Name, e.SandboxID)
-		}
-		log.Fatal("Use 'remove' to clean up duplicates.")
+	// Save session with current PID.
+	if err := SaveSession(session); err != nil {
+		log.Printf("Warning: failed to save session: %v", err)
 	}
-	log.Printf("Using credentials (sandbox: %s)", entry.SandboxID)
-	if opts.Server != "" {
-		entry.Server = opts.Server
-	}
+	defer CleanupSession(session)
 
 	// PTY management: start Claude Code lazily on first terminal stream.
 	var ptyMu sync.Mutex
 	var ptyInstance *ClaudeCodePTY
 
-	tunnelClient := NewClient(entry.Server, entry.SandboxID, entry.TunnelToken, "", "", opts.WorkDir)
+	tunnelClient := NewClient(session.ServerURL, session.SandboxID, session.TunnelToken, "", "", opts.WorkDir)
 	tunnelClient.BackendType = "claudecode"
 
 	// Set up terminal stream handler.
 	tunnelClient.OnTerminalStream = func(stream net.Conn) {
 		ptyMu.Lock()
-		// Reset dead PTY instance so a new one is started.
 		if ptyInstance != nil && !ptyInstance.IsAlive() {
 			log.Printf("Claude Code PTY exited, will restart on next connection")
 			ptyInstance.Close()
@@ -158,14 +179,14 @@ func RunClaudeCode(opts ClaudeCodeOptions) {
 	}()
 
 	// Auto-register agent card.
-	if err := RegisterDefaultCard(entry.Server, entry.TunnelToken, entry.Name); err != nil {
+	if err := RegisterDefaultCard(session.ServerURL, session.TunnelToken, session.Name); err != nil {
 		log.Printf("Warning: failed to register agent card: %v (will retry on reconnect)", err)
 	} else {
-		log.Printf("Agent card registered: %s", entry.Name)
+		log.Printf("Agent card registered: %s", session.Name)
 	}
 
-	// Inject MCP bridge config so Claude Code auto-discovers agentserver tools.
-	if err := injectMCPConfig(entry.Server, entry.TunnelToken, entry.WorkspaceID, entry.SandboxID, opts.WorkDir); err != nil {
+	// Inject MCP bridge config.
+	if err := injectMCPConfig(session.ServerURL, session.TunnelToken, session.WorkspaceID, session.SandboxID, opts.WorkDir); err != nil {
 		log.Printf("Warning: failed to inject MCP config: %v", err)
 	} else {
 		log.Printf("MCP bridge config injected")
@@ -173,14 +194,14 @@ func RunClaudeCode(opts ClaudeCodeOptions) {
 
 	// Start task worker in background.
 	go RunTaskWorker(ctx, TaskWorkerOptions{
-		ServerURL:  entry.Server,
-		ProxyToken: entry.TunnelToken,
-		SandboxID:  entry.SandboxID,
+		ServerURL:  session.ServerURL,
+		ProxyToken: session.TunnelToken,
+		SandboxID:  session.SandboxID,
 		Workdir:    opts.WorkDir,
 		CLIPath:    opts.ClaudeBin,
 	})
 
-	log.Printf("Connecting to %s (Claude Code terminal agent)...", entry.Server)
+	log.Printf("Connecting to %s (Claude Code terminal agent)...", session.ServerURL)
 	if err := tunnelClient.Run(ctx); err != nil && ctx.Err() == nil {
 		log.Fatalf("Agent error: %v", err)
 	}
@@ -192,12 +213,12 @@ func RunClaudeCode(opts ClaudeCodeOptions) {
 	ptyMu.Unlock()
 
 	fmt.Println("Claude Code agent disconnected.")
+	fmt.Printf("To resume this session: agentserver --resume %s\n", session.SandboxID)
 }
 
 // injectMCPConfig writes a .mcp.json in the working directory so Claude Code
 // auto-discovers the agentserver MCP bridge.
 func injectMCPConfig(serverURL, token, workspaceID, sandboxID, workDir string) error {
-	// Find our own binary — MCP server runs as `agentserver mcp-server`.
 	self, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("cannot find own executable: %w", err)
@@ -219,14 +240,12 @@ func injectMCPConfig(serverURL, token, workspaceID, sandboxID, workDir string) e
 		},
 	}
 
-	// Read existing .mcp.json and merge (don't overwrite user's other MCP servers).
 	mcpPath := filepath.Join(workDir, ".mcp.json")
 	existing := make(map[string]any)
 	if data, err := os.ReadFile(mcpPath); err == nil {
 		json.Unmarshal(data, &existing)
 	}
 
-	// Merge mcpServers.
 	existingServers, _ := existing["mcpServers"].(map[string]any)
 	if existingServers == nil {
 		existingServers = make(map[string]any)
@@ -243,4 +262,3 @@ func injectMCPConfig(serverURL, token, workspaceID, sandboxID, workDir string) e
 	}
 	return os.WriteFile(mcpPath, append(data, '\n'), 0600)
 }
-

@@ -12,56 +12,35 @@ import (
 )
 
 // ErrNeedReLogin indicates all tokens have expired and interactive re-auth is needed.
-var ErrNeedReLogin = errors.New("all tokens expired, please run 'agentserver-agent login' again")
+var ErrNeedReLogin = errors.New("all tokens expired, please run 'agentserver login' again")
 
-// EnsureValidCredentials checks sandbox credentials and refreshes if needed.
-func EnsureValidCredentials(entry *RegistryEntry) error {
-	return ensureValidCredentials(entry, DefaultCredentialsPath(), DefaultRegistryPath(), pingServer)
+// EnsureValidToken checks for a valid OAuth access token, refreshing if needed.
+// Returns the access token or ErrNeedReLogin if interactive auth is required.
+func EnsureValidToken(serverURL string) (string, error) {
+	return ensureValidToken(serverURL, DefaultCredentialsPath())
 }
 
-// ensureValidCredentials is the testable inner implementation.
-func ensureValidCredentials(entry *RegistryEntry, credPath, regPath string, pingFn func(*RegistryEntry) error) error {
-	// 1. Try existing sandbox credentials.
-	if err := pingFn(entry); err == nil {
-		return nil
-	}
-
-	// 2. Load OAuth credentials.
+func ensureValidToken(serverURL, credPath string) (string, error) {
 	creds, err := LoadCredentials(credPath)
 	if err != nil || creds == nil {
-		return ErrNeedReLogin
+		return "", ErrNeedReLogin
 	}
 
-	// 3. Try refresh_token.
+	// Token still valid.
+	if creds.AccessToken != "" && time.Now().Before(creds.ExpiresAt) {
+		return creds.AccessToken, nil
+	}
+
+	// Try refresh.
 	if creds.RefreshToken == "" {
-		return ErrNeedReLogin
+		return "", ErrNeedReLogin
 	}
 
-	newToken, err := refreshAccessToken(entry.Server, creds.RefreshToken)
+	newToken, err := refreshAccessToken(serverURL, creds.RefreshToken)
 	if err != nil {
-		return ErrNeedReLogin
+		return "", ErrNeedReLogin
 	}
 
-	// 4. Re-register with new access_token.
-	regResp, err := registerAgentWithToken(entry.Server, newToken.AccessToken, entry.Name, entry.Type)
-	if err != nil {
-		return ErrNeedReLogin
-	}
-
-	// 5. Update entry and save.
-	entry.SandboxID = regResp.SandboxID
-	entry.TunnelToken = regResp.TunnelToken
-
-	locked, lockErr := LockRegistry(regPath)
-	if lockErr == nil {
-		locked.Reg.Put(entry)
-		if err := locked.Save(); err != nil {
-			log.Printf("warning: failed to persist refreshed registry: %v", err)
-		}
-		locked.Close()
-	}
-
-	// 6. Update credentials.
 	creds.AccessToken = newToken.AccessToken
 	creds.RefreshToken = newToken.RefreshToken
 	creds.ExpiresAt = time.Now().Add(time.Duration(newToken.ExpiresIn) * time.Second)
@@ -69,7 +48,7 @@ func ensureValidCredentials(entry *RegistryEntry, credPath, regPath string, ping
 		log.Printf("warning: failed to persist refreshed credentials: %v", err)
 	}
 
-	return nil
+	return newToken.AccessToken, nil
 }
 
 func refreshAccessToken(serverURL, refreshToken string) (*TokenResponse, error) {
@@ -94,27 +73,4 @@ func refreshAccessToken(serverURL, refreshToken string) (*TokenResponse, error) 
 		return nil, fmt.Errorf("decode refresh response: %w", err)
 	}
 	return &tokenResp, nil
-}
-
-// pingServer verifies sandbox credentials are still valid.
-func pingServer(entry *RegistryEntry) error {
-	req, err := http.NewRequest(http.MethodGet,
-		strings.TrimRight(entry.Server, "/")+"/api/agent/tasks/poll?sandbox_id="+entry.SandboxID,
-		nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+entry.TunnelToken)
-
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	resp.Body.Close()
-
-	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return fmt.Errorf("credentials expired (status %d)", resp.StatusCode)
-	}
-	return nil
 }
