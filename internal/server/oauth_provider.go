@@ -54,8 +54,8 @@ func (s *Server) handleOAuthLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// No session — redirect to the login page with the challenge as a query param.
-	http.Redirect(w, r, "/?oauth_login_challenge="+challenge, http.StatusFound)
+	// No session — redirect to the frontend login page.
+	http.Redirect(w, r, "/oauth/login?login_challenge="+challenge, http.StatusFound)
 }
 
 // handleOAuthLoginSubmit processes the login form submission during OAuth flow.
@@ -103,7 +103,7 @@ func (s *Server) handleOAuthConsent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Redirect to frontend consent UI.
-	http.Redirect(w, r, "/?oauth_consent_challenge="+challenge, http.StatusFound)
+	http.Redirect(w, r, "/oauth/consent?consent_challenge="+challenge, http.StatusFound)
 }
 
 // handleOAuthConsentSubmit processes the consent form submission (workspace selection).

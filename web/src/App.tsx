@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Routes, Route, useNavigate, useParams, useLocation, Navigate } from 'react-router-dom'
+import { Routes, Route, useNavigate, useParams, useLocation, useSearchParams, Navigate } from 'react-router-dom'
 import { Loader2 } from 'lucide-react'
 import {
   checkAuth,
@@ -62,22 +62,23 @@ function SandboxDetailRoute({
   )
 }
 
+function OAuthLoginRoute() {
+  const [searchParams] = useSearchParams()
+  const challenge = searchParams.get('login_challenge') ?? ''
+  if (!challenge) return <div>Missing login_challenge</div>
+  return <OAuthLogin challenge={challenge} />
+}
+
+function OAuthConsentRoute() {
+  const [searchParams] = useSearchParams()
+  const challenge = searchParams.get('consent_challenge') ?? ''
+  if (!challenge) return <div>Missing consent_challenge</div>
+  return <OAuthConsent challenge={challenge} />
+}
+
 export default function App() {
   const navigate = useNavigate()
   const location = useLocation()
-
-  // Check for OAuth flow query params.
-  const searchParams = new URLSearchParams(location.search)
-  const oauthLoginChallenge = searchParams.get('oauth_login_challenge')
-  const oauthConsentChallenge = searchParams.get('oauth_consent_challenge')
-
-  // Render OAuth pages if we're in an OAuth flow.
-  if (oauthLoginChallenge) {
-    return <OAuthLogin challenge={oauthLoginChallenge} />
-  }
-  if (oauthConsentChallenge) {
-    return <OAuthConsent challenge={oauthConsentChallenge} />
-  }
 
   const [authed, setAuthed] = useState<boolean | null>(null)
   const [user, setUser] = useState<UserInfo | null>(null)
@@ -272,6 +273,8 @@ export default function App() {
           path="/admin/*"
           element={<AdminPanel />}
         />
+        <Route path="/oauth/login" element={<OAuthLoginRoute />} />
+        <Route path="/oauth/consent" element={<OAuthConsentRoute />} />
         <Route path="*" element={selectedWorkspaceId ? <Navigate to={`/w/${selectedWorkspaceId}`} replace /> : null} />
       </Routes>
     </div>
