@@ -19,6 +19,19 @@ Return the secret name containing the database-url key.
 - If externalDatabase.existingSecret is set, use that
 - Otherwise, use the chart-managed secret
 */}}
+{{/*
+Construct the Hydra DSN.
+- Shared PG: use the same PostgreSQL instance with a different database name
+- External: use hydra.database.externalDsn
+*/}}
+{{- define "agentserver.hydraDsn" -}}
+{{- if .Values.hydra.database.externalDsn -}}
+{{ .Values.hydra.database.externalDsn }}
+{{- else -}}
+postgres://{{ .Values.postgresql.auth.username }}:{{ .Values.postgresql.auth.password }}@{{ .Release.Name }}-postgresql:5432/{{ .Values.hydra.database.name }}?sslmode=disable
+{{- end -}}
+{{- end -}}
+
 {{- define "agentserver.databaseSecretName" -}}
 {{- if .Values.externalDatabase.existingSecret -}}
 {{ .Values.externalDatabase.existingSecret }}

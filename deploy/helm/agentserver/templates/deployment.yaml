@@ -227,6 +227,12 @@ spec:
             - name: MODELSERVER_PROXY_URL
               value: {{ .Values.modelserver.proxyUrl | quote }}
             {{- end }}
+            {{- if .Values.hydra.enabled }}
+            - name: HYDRA_ADMIN_URL
+              value: {{ printf "http://%s-hydra-admin:%v" .Release.Name (int .Values.hydra.adminPort) | quote }}
+            - name: HYDRA_PUBLIC_URL
+              value: {{ printf "http://%s-hydra-public:%v" .Release.Name (int .Values.hydra.publicPort) | quote }}
+            {{- end }}
             {{- if .Values.platform.auth.oidc.generic.enabled }}
             - name: OIDC_ISSUER_URL
               value: {{ .Values.platform.auth.oidc.generic.issuerUrl | quote }}

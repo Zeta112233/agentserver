@@ -121,6 +121,27 @@ agentSandbox:
   install: true
   controllerImage: registry.k8s.io/agent-sandbox/agent-sandbox-controller:v0.1.1
 
+hydra:
+  # Ory Hydra OAuth2 server for agent Device Flow registration.
+  # When enabled, deploys Hydra alongside agentserver and configures
+  # the agentserver as Hydra's login/consent provider.
+  enabled: false
+  image:
+    repository: oryd/hydra
+    tag: "v26.2.1"
+    pullPolicy: IfNotPresent
+  publicPort: 4444
+  adminPort: 4445
+  database:
+    # Database name created on the shared PostgreSQL instance.
+    name: hydra
+    # Set to use an external database instead of the shared PostgreSQL.
+    externalDsn: ""
+  # System secret for cookie/token encryption (32+ chars, auto-generated if empty).
+  secretsSystem: ""
+  # Device Flow polling interval.
+  deviceAuthTokenPollingInterval: "5s"
+
 modelserver:
   # Connect workspaces to a ModelServer project via OAuth 2.0 (Hydra).
   # When enabled, sandbox LLM traffic routes through llmproxy → ModelServer.
