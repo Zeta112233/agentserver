@@ -1,102 +1,4 @@
 {{- if .Values.hydra.enabled }}
-# --- Hydra DB migration Job (Helm hook) ---
-apiVersion: batch/v1
-kind: Job
-metadata:
-  name: {{ .Release.Name }}-hydra-migrate
-  labels:
-    app.kubernetes.io/component: hydra-migrate
-  annotations:
-    "helm.sh/hook": post-install,post-upgrade
-    "helm.sh/hook-weight": "0"
-    "helm.sh/hook-delete-policy": before-hook-creation
-spec:
-  backoffLimit: 3
-  ttlSecondsAfterFinished: 300
-  template:
-    metadata:
-      labels:
-        app.kubernetes.io/component: hydra-migrate
-    spec:
-      restartPolicy: Never
-      initContainers:
-        - name: create-db
-          image: {{ .Values.postgresql.image.repository }}:{{ .Values.postgresql.image.tag }}
-          command: ["sh", "-c"]
-          args:
-            - |
-              until pg_isready -h {{ .Release.Name }}-postgresql -U {{ .Values.postgresql.auth.username }}; do sleep 2; done
-              PGPASSWORD="$PG_PASSWORD" psql -h {{ .Release.Name }}-postgresql -U {{ .Values.postgresql.auth.username }} -d {{ .Values.postgresql.auth.database }} -tc "SELECT 1 FROM pg_database WHERE datname='{{ .Values.hydra.database.name }}'" | grep -q 1 || \
-              PGPASSWORD="$PG_PASSWORD" createdb -h {{ .Release.Name }}-postgresql -U {{ .Values.postgresql.auth.username }} {{ .Values.hydra.database.name }}
-          env:
-            - name: PG_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Release.Name }}-hydra-secret
-                  key: pg-password
-      containers:
-        - name: migrate
-          image: {{ .Values.hydra.image.repository }}:{{ .Values.hydra.image.tag }}
-          imagePullPolicy: {{ .Values.hydra.image.pullPolicy }}
-          command: ["hydra", "migrate", "sql", "-e", "--yes"]
-          env:
-            - name: DSN
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Release.Name }}-hydra-secret
-                  key: dsn
----
-# --- Hydra OAuth2 client registration Job (Helm hook) ---
-apiVersion: batch/v1
-kind: Job
-metadata:
-  name: {{ .Release.Name }}-hydra-client-setup
-  labels:
-    app.kubernetes.io/component: hydra-client-setup
-  annotations:
-    "helm.sh/hook": post-install,post-upgrade
-    "helm.sh/hook-weight": "1"
-    "helm.sh/hook-delete-policy": before-hook-creation
-spec:
-  backoffLimit: 3
-  ttlSecondsAfterFinished: 300
-  template:
-    metadata:
-      labels:
-        app.kubernetes.io/component: hydra-client-setup
-    spec:
-      restartPolicy: Never
-      initContainers:
-        - name: wait-hydra
-          image: {{ .Values.hydra.image.repository }}:{{ .Values.hydra.image.tag }}
-          imagePullPolicy: {{ .Values.hydra.image.pullPolicy }}
-          command: ["sh", "-c"]
-          args:
-            - |
-              until wget -qO- http://{{ .Release.Name }}-hydra-admin:{{ .Values.hydra.adminPort }}/health/ready 2>/dev/null | grep -q ok; do
-                echo "Waiting for Hydra to be ready..."
-                sleep 3
-              done
-      containers:
-        - name: register-client
-          image: {{ .Values.hydra.image.repository }}:{{ .Values.hydra.image.tag }}
-          imagePullPolicy: {{ .Values.hydra.image.pullPolicy }}
-          command: ["sh", "-c"]
-          args:
-            - |
-              ENDPOINT="http://{{ .Release.Name }}-hydra-admin:{{ .Values.hydra.adminPort }}"
-              hydra delete oauth2-client agentserver-agent-cli --endpoint "$ENDPOINT" 2>/dev/null || true
-              hydra create oauth2-client \
-                --endpoint "$ENDPOINT" \
-                --id agentserver-agent-cli \
-                --name "Agentserver Agent CLI" \
-                --grant-type urn:ietf:params:oauth:grant-type:device_code \
-                --grant-type refresh_token \
-                --response-type code \
-                --scope openid --scope profile --scope agent:register \
-                --token-endpoint-auth-method none \
-                --audience https://{{ .Values.platform.domain }}
----
 # --- Hydra Secret (DSN + system secret) ---
 {{- $existingSecret := (lookup "v1" "Secret" .Release.Namespace (printf "%s-hydra-secret" .Release.Name)) }}
 apiVersion: v1
@@ -118,6 +20,7 @@ stringData:
   {{- end }}
 ---
 # --- Hydra Deployment ---
+# initContainers handle DB creation and schema migration before Hydra starts.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -134,6 +37,33 @@ spec:
       labels:
         app.kubernetes.io/component: hydra
     spec:
+      initContainers:
+        # 1. Create the "hydra" database in shared PostgreSQL
+        - name: create-db
+          image: {{ .Values.postgresql.image.repository }}:{{ .Values.postgresql.image.tag }}
+          command: ["sh", "-c"]
+          args:
+            - |
+              until pg_isready -h {{ .Release.Name }}-postgresql -U {{ .Values.postgresql.auth.username }}; do sleep 2; done
+              PGPASSWORD="$PG_PASSWORD" psql -h {{ .Release.Name }}-postgresql -U {{ .Values.postgresql.auth.username }} -d {{ .Values.postgresql.auth.database }} -tc "SELECT 1 FROM pg_database WHERE datname='{{ .Values.hydra.database.name }}'" | grep -q 1 || \
+              PGPASSWORD="$PG_PASSWORD" createdb -h {{ .Release.Name }}-postgresql -U {{ .Values.postgresql.auth.username }} {{ .Values.hydra.database.name }}
+          env:
+            - name: PG_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-hydra-secret
+                  key: pg-password
+        # 2. Run Hydra SQL migrations
+        - name: migrate
+          image: {{ .Values.hydra.image.repository }}:{{ .Values.hydra.image.tag }}
+          imagePullPolicy: {{ .Values.hydra.image.pullPolicy }}
+          command: ["hydra", "migrate", "sql", "-e", "--yes"]
+          env:
+            - name: DSN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-hydra-secret
+                  key: dsn
       containers:
         - name: hydra
           image: {{ .Values.hydra.image.repository }}:{{ .Values.hydra.image.tag }}
@@ -187,6 +117,55 @@ spec:
               memory: 64Mi
             limits:
               memory: 256Mi
+---
+# --- Hydra OAuth2 client registration Job ---
+# Runs as a regular Job (not a Helm hook) so Pulumi/ArgoCD can manage it.
+# Waits for Hydra to be ready, then idempotently registers the CLI client.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-hydra-client-setup
+  labels:
+    app.kubernetes.io/component: hydra-client-setup
+spec:
+  backoffLimit: 5
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: hydra-client-setup
+    spec:
+      restartPolicy: Never
+      initContainers:
+        - name: wait-hydra
+          image: {{ .Values.hydra.image.repository }}:{{ .Values.hydra.image.tag }}
+          imagePullPolicy: {{ .Values.hydra.image.pullPolicy }}
+          command: ["sh", "-c"]
+          args:
+            - |
+              until wget -qO- http://{{ .Release.Name }}-hydra-admin:{{ .Values.hydra.adminPort }}/health/ready 2>/dev/null | grep -q ok; do
+                echo "Waiting for Hydra to be ready..."
+                sleep 3
+              done
+      containers:
+        - name: register-client
+          image: {{ .Values.hydra.image.repository }}:{{ .Values.hydra.image.tag }}
+          imagePullPolicy: {{ .Values.hydra.image.pullPolicy }}
+          command: ["sh", "-c"]
+          args:
+            - |
+              ENDPOINT="http://{{ .Release.Name }}-hydra-admin:{{ .Values.hydra.adminPort }}"
+              hydra delete oauth2-client agentserver-agent-cli --endpoint "$ENDPOINT" 2>/dev/null || true
+              hydra create oauth2-client \
+                --endpoint "$ENDPOINT" \
+                --id agentserver-agent-cli \
+                --name "Agentserver Agent CLI" \
+                --grant-type urn:ietf:params:oauth:grant-type:device_code \
+                --grant-type refresh_token \
+                --response-type code \
+                --scope openid --scope profile --scope agent:register \
+                --token-endpoint-auth-method none \
+                --audience https://{{ .Values.platform.domain }}
 ---
 # --- Hydra Public Service ---
 apiVersion: v1
