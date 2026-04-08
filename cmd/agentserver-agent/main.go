@@ -17,7 +17,6 @@ import (
 
 var (
 	server        string
-	code          string
 	name          string
 	workspaceID   string
 	opencodeURL   string
@@ -46,7 +45,7 @@ var connectCmd = &cobra.Command{
 	Short: "Connect local opencode to agentserver",
 	Long: `Establish a WebSocket tunnel between a local opencode instance and agentserver.
 
-On first run, provide --server and --code to register with the server.
+On first run, provide --server and --hydra-url to authenticate and register.
 On subsequent runs, the saved credentials will be used automatically.
 
 By default, opencode serve is started automatically on --opencode-port (4096).
@@ -54,9 +53,10 @@ Use --auto-start=false to disable this and manage opencode manually.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		agent.RunConnect(agent.ConnectOptions{
 			Server:          server,
-			Code:            code,
+			HydraURL:        hydraURL,
 			Name:            name,
 			WorkspaceID:     workspaceID,
+			SkipOpenBrowser: skipOpenBrowser,
 			OpencodeURL:     opencodeURL,
 			OpencodeURLSet:  cmd.Flags().Changed("opencode-url"),
 			OpencodeToken:   opencodeToken,
@@ -180,15 +180,16 @@ var claudecodeCmd = &cobra.Command{
 via WebSocket tunnel. Users can access the terminal through the web browser at
 claude-{id}.{domain}.
 
-On first run, provide --server and --code to register with the server.
+On first run, provide --server and --hydra-url to authenticate and register.
 On subsequent runs, saved credentials are used automatically.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		agent.RunClaudeCode(agent.ClaudeCodeOptions{
-			Server:    server,
-			Code:      code,
-			Name:      name,
-			ClaudeBin: claudeBin,
-			WorkDir:   claudeWorkDir,
+			Server:          server,
+			HydraURL:        hydraURL,
+			Name:            name,
+			SkipOpenBrowser: skipOpenBrowser,
+			ClaudeBin:       claudeBin,
+			WorkDir:         claudeWorkDir,
 		})
 	},
 }
@@ -308,9 +309,10 @@ func init() {
 	loginCmd.Flags().BoolVar(&skipOpenBrowser, "skip-open-browser", false, "Don't auto-open browser, show URL + QR only")
 
 	connectCmd.Flags().StringVar(&server, "server", "", "Agent server URL (e.g., https://cli.example.com)")
-	connectCmd.Flags().StringVar(&code, "code", "", "One-time registration code from Web UI")
+	connectCmd.Flags().StringVar(&hydraURL, "hydra-url", "", "Hydra public URL for OAuth login")
 	connectCmd.Flags().StringVar(&name, "name", "", "Name for this agent (default: hostname)")
 	connectCmd.Flags().StringVar(&workspaceID, "workspace", "", "Workspace ID to connect to")
+	connectCmd.Flags().BoolVar(&skipOpenBrowser, "skip-open-browser", false, "Don't auto-open browser, show URL + QR only")
 	connectCmd.Flags().StringVar(&opencodeURL, "opencode-url", "", "Local opencode server URL (default: http://localhost:{opencode-port})")
 	connectCmd.Flags().StringVar(&opencodeToken, "opencode-token", "", "Local opencode server token")
 	connectCmd.Flags().BoolVar(&autoStart, "auto-start", true, "Automatically start opencode serve")
@@ -318,8 +320,9 @@ func init() {
 	connectCmd.Flags().IntVar(&opencodePort, "opencode-port", 4096, "Port to start opencode on")
 
 	claudecodeCmd.Flags().StringVar(&server, "server", "", "Agent server URL (e.g., https://cli.example.com)")
-	claudecodeCmd.Flags().StringVar(&code, "code", "", "One-time registration code from Web UI")
+	claudecodeCmd.Flags().StringVar(&hydraURL, "hydra-url", "", "Hydra public URL for OAuth login")
 	claudecodeCmd.Flags().StringVar(&name, "name", "", "Name for this agent (default: hostname)")
+	claudecodeCmd.Flags().BoolVar(&skipOpenBrowser, "skip-open-browser", false, "Don't auto-open browser, show URL + QR only")
 	claudecodeCmd.Flags().StringVar(&claudeBin, "claude-bin", "claude", "Path to the claude binary")
 	claudecodeCmd.Flags().StringVar(&claudeWorkDir, "work-dir", "", "Working directory for Claude Code (default: current directory)")
 

@@ -14,9 +14,10 @@ import (
 // ConnectOptions holds all flags for the connect command.
 type ConnectOptions struct {
 	Server          string
-	Code            string
+	HydraURL        string
 	Name            string
 	WorkspaceID     string // optional: disambiguate when dir has multiple workspaces
+	SkipOpenBrowser bool
 	OpencodeURL     string
 	OpencodeURLSet  bool // true if --opencode-url was explicitly provided
 	OpencodeToken   string
@@ -43,74 +44,63 @@ func RunConnect(opts ConnectOptions) {
 	defer locked.Close()
 
 	reg := locked.Reg
-	var entry *RegistryEntry
 
-	if opts.Code != "" {
-		// --- New registration ---
+	// Check if we need to register (no saved credentials for this directory).
+	entries := reg.FindByDir(cwd)
+	if len(entries) == 0 {
+		// --- New registration via OAuth Device Flow ---
 		if opts.Server == "" {
 			log.Fatal("--server is required for registration")
 		}
-		if opts.Name == "" {
-			hostname, _ := os.Hostname()
-			if hostname != "" {
-				opts.Name = hostname
-			} else {
-				opts.Name = "Local Agent"
-			}
+		if opts.HydraURL == "" {
+			log.Fatal("--hydra-url is required for registration")
+		}
+		locked.Close() // Release lock during interactive login.
+
+		if err := RunLogin(LoginOptions{
+			ServerURL:       opts.Server,
+			HydraPublicURL:  opts.HydraURL,
+			Name:            opts.Name,
+			Type:            "opencode",
+			SkipOpenBrowser: opts.SkipOpenBrowser,
+		}); err != nil {
+			log.Fatalf("Login failed: %v", err)
 		}
 
-		log.Printf("Registering with server %s...", opts.Server)
-		entry, err = Register(opts.Server, opts.Code, opts.Name, "opencode")
+		// Re-lock and reload registry.
+		locked, err = LockRegistry(registryPath)
 		if err != nil {
-			log.Fatalf("Registration failed: %v", err)
+			log.Fatalf("Failed to reload registry: %v", err)
 		}
-		log.Printf("Registered successfully (sandbox: %s)", entry.SandboxID)
-
-		entry.Dir = cwd
-
-		// Assign port.
-		if opts.OpencodePortSet {
-			entry.OpencodePort = opts.OpencodePort
-		} else {
-			entry.OpencodePort = reg.NextPort()
+		defer locked.Close()
+		reg = locked.Reg
+		entries = reg.FindByDir(cwd)
+		if len(entries) == 0 {
+			log.Fatal("Registration succeeded but no entry found in registry")
 		}
+	}
 
-		// Warn if overwriting.
-		if existing := reg.Find(cwd, entry.WorkspaceID); existing != nil {
-			log.Printf("Warning: overwriting existing entry for dir=%q workspace=%q", cwd, entry.WorkspaceID)
-		}
-
-		reg.Put(entry)
-		if err := locked.Save(); err != nil {
-			log.Printf("Warning: failed to save registry: %v", err)
-		} else {
-			log.Printf("Registry saved to %s", registryPath)
-		}
-	} else {
-		// --- Reconnect using saved credentials ---
-		entries := reg.FindByDir(cwd)
-		switch len(entries) {
-		case 0:
-			log.Fatal("No agent registered for this directory. Use --code to register.")
-		case 1:
-			entry = entries[0]
-		default:
-			if opts.WorkspaceID == "" {
-				log.Printf("Multiple workspaces registered for this directory:")
-				for _, e := range entries {
-					log.Printf("  workspace=%s  name=%s  sandbox=%s", e.WorkspaceID, e.Name, e.SandboxID)
-				}
-				log.Fatal("Use --workspace to specify which one to connect.")
+	// Select entry.
+	var entry *RegistryEntry
+	switch len(entries) {
+	case 1:
+		entry = entries[0]
+	default:
+		if opts.WorkspaceID == "" {
+			log.Printf("Multiple workspaces registered for this directory:")
+			for _, e := range entries {
+				log.Printf("  workspace=%s  name=%s  sandbox=%s", e.WorkspaceID, e.Name, e.SandboxID)
 			}
-			entry = reg.Find(cwd, opts.WorkspaceID)
-			if entry == nil {
-				log.Fatalf("No entry found for workspace %q in this directory", opts.WorkspaceID)
-			}
+			log.Fatal("Use --workspace to specify which one to connect.")
 		}
-		log.Printf("Using saved credentials (sandbox: %s)", entry.SandboxID)
-		if opts.Server != "" {
-			entry.Server = opts.Server
+		entry = reg.Find(cwd, opts.WorkspaceID)
+		if entry == nil {
+			log.Fatalf("No entry found for workspace %q in this directory", opts.WorkspaceID)
 		}
+	}
+	log.Printf("Using credentials (sandbox: %s)", entry.SandboxID)
+	if opts.Server != "" {
+		entry.Server = opts.Server
 	}
 
 	// Determine opencode port: command-line override or entry value.

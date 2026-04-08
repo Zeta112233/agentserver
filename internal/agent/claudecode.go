@@ -15,11 +15,12 @@ import (
 
 // ClaudeCodeOptions holds all flags for the claudecode command.
 type ClaudeCodeOptions struct {
-	Server    string
-	Code      string
-	Name      string
-	ClaudeBin string
-	WorkDir   string
+	Server          string
+	HydraURL        string
+	Name            string
+	SkipOpenBrowser bool
+	ClaudeBin       string
+	WorkDir         string
 }
 
 // RunClaudeCode executes the Claude Code agent connect workflow.
@@ -43,65 +44,67 @@ func RunClaudeCode(opts ClaudeCodeOptions) {
 	defer locked.Close()
 
 	reg := locked.Reg
-	var entry *RegistryEntry
 
-	if opts.Code != "" {
-		// New registration.
+	entries := reg.FindByDir(cwd)
+	// Filter to claudecode entries only.
+	var ccEntries []*RegistryEntry
+	for _, e := range entries {
+		if e.Type == "claudecode" {
+			ccEntries = append(ccEntries, e)
+		}
+	}
+
+	if len(ccEntries) == 0 {
+		// --- New registration via OAuth Device Flow ---
 		if opts.Server == "" {
 			log.Fatal("--server is required for registration")
 		}
-		if opts.Name == "" {
-			hostname, _ := os.Hostname()
-			if hostname != "" {
-				opts.Name = hostname
-			} else {
-				opts.Name = "Claude Code Agent"
-			}
+		if opts.HydraURL == "" {
+			log.Fatal("--hydra-url is required for registration")
+		}
+		locked.Close()
+
+		if err := RunLogin(LoginOptions{
+			ServerURL:       opts.Server,
+			HydraPublicURL:  opts.HydraURL,
+			Name:            opts.Name,
+			Type:            "claudecode",
+			SkipOpenBrowser: opts.SkipOpenBrowser,
+		}); err != nil {
+			log.Fatalf("Login failed: %v", err)
 		}
 
-		log.Printf("Registering with server %s...", opts.Server)
-		entry, err = Register(opts.Server, opts.Code, opts.Name, "claudecode")
+		locked, err = LockRegistry(registryPath)
 		if err != nil {
-			log.Fatalf("Registration failed: %v", err)
+			log.Fatalf("Failed to reload registry: %v", err)
 		}
-		log.Printf("Registered successfully (sandbox: %s)", entry.SandboxID)
-
-		entry.Dir = cwd
-
-		if existing := reg.Find(cwd, entry.WorkspaceID); existing != nil {
-			log.Printf("Warning: overwriting existing entry for dir=%q workspace=%q", cwd, entry.WorkspaceID)
-		}
-
-		reg.Put(entry)
-		if err := locked.Save(); err != nil {
-			log.Printf("Warning: failed to save registry: %v", err)
-		}
-	} else {
-		// Reconnect using saved credentials.
-		entries := reg.FindByDir(cwd)
-		// Filter to claudecode entries only.
-		var ccEntries []*RegistryEntry
-		for _, e := range entries {
+		defer locked.Close()
+		reg = locked.Reg
+		ccEntries = nil
+		for _, e := range reg.FindByDir(cwd) {
 			if e.Type == "claudecode" {
 				ccEntries = append(ccEntries, e)
 			}
 		}
-		switch len(ccEntries) {
-		case 0:
-			log.Fatal("No Claude Code agent registered for this directory. Use --code to register.")
-		case 1:
-			entry = ccEntries[0]
-		default:
-			log.Printf("Multiple Claude Code agents registered for this directory:")
-			for _, e := range ccEntries {
-				log.Printf("  workspace=%s  name=%s  sandbox=%s", e.WorkspaceID, e.Name, e.SandboxID)
-			}
-			log.Fatal("Use --code to create a new registration or remove duplicates.")
+		if len(ccEntries) == 0 {
+			log.Fatal("Registration succeeded but no claudecode entry found")
 		}
-		log.Printf("Using saved credentials (sandbox: %s)", entry.SandboxID)
-		if opts.Server != "" {
-			entry.Server = opts.Server
+	}
+
+	var entry *RegistryEntry
+	switch len(ccEntries) {
+	case 1:
+		entry = ccEntries[0]
+	default:
+		log.Printf("Multiple Claude Code agents registered for this directory:")
+		for _, e := range ccEntries {
+			log.Printf("  workspace=%s  name=%s  sandbox=%s", e.WorkspaceID, e.Name, e.SandboxID)
 		}
+		log.Fatal("Use 'remove' to clean up duplicates.")
+	}
+	log.Printf("Using credentials (sandbox: %s)", entry.SandboxID)
+	if opts.Server != "" {
+		entry.Server = opts.Server
 	}
 
 	// PTY management: start Claude Code lazily on first terminal stream.

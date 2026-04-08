@@ -52,46 +52,6 @@ func NewClient(serverURL, sandboxID, tunnelToken, opencodeURL, opencodeToken, wo
 	}
 }
 
-// Register registers a new local agent with the server using a one-time code.
-func Register(serverURL, code, name, agentType string) (*RegistryEntry, error) {
-	if agentType == "" {
-		agentType = "opencode"
-	}
-	body := fmt.Sprintf(`{"code":%q,"name":%q,"type":%q}`, code, name, agentType)
-	resp, err := http.Post(
-		serverURL+"/api/agent/register",
-		"application/json",
-		strings.NewReader(body),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("register request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusCreated {
-		respBody, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("registration failed (%d): %s", resp.StatusCode, string(respBody))
-	}
-
-	var result struct {
-		SandboxID   string `json:"sandbox_id"`
-		TunnelToken string `json:"tunnel_token"`
-		WorkspaceID string `json:"workspace_id"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("decode response: %w", err)
-	}
-
-	return &RegistryEntry{
-		Server:      serverURL,
-		SandboxID:   result.SandboxID,
-		TunnelToken: result.TunnelToken,
-		WorkspaceID: result.WorkspaceID,
-		Name:        name,
-		Type:        agentType,
-	}, nil
-}
-
 // Run connects to the server and enters the tunnel event loop.
 // It automatically reconnects with exponential backoff on disconnection.
 func (c *Client) Run(ctx context.Context) error {
