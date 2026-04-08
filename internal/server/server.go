@@ -181,6 +181,8 @@ func (s *Server) Router() http.Handler {
 	if s.HydraPublicURL != "" {
 		r.Post("/api/oauth2/device/auth", s.hydraProxyRewrite("/oauth2/device/auth"))
 		r.Post("/api/oauth2/token", s.hydraProxyRewrite("/oauth2/token"))
+		r.Get("/api/oauth2/device/verify", s.hydraProxyRewrite("/oauth2/device/verify"))
+		r.Post("/api/oauth2/device/verify", s.hydraProxyRewrite("/oauth2/device/verify"))
 	}
 
 	// Agent card registration (auth via proxy_token).
