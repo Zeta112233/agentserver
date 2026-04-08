@@ -74,4 +74,10 @@ type InboundMessage struct {
 	MediaData     []byte            // optional: downloaded media (image/file) binary data
 	MediaType     string            // optional: "image", "voice", "file", "video"
 	MediaFilename string            // optional: original filename for file attachments
+	// Quoted/replied-to message content.
+	QuotedText          string
+	QuotedMediaData     []byte
+	QuotedMediaType     string
+	QuotedMediaFilename string
+	QuotedSender        string
 }

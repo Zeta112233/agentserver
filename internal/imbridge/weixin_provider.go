@@ -78,6 +78,29 @@ func (p *WeixinProvider) Poll(ctx context.Context, creds *Credentials, cursor st
 			msg.MediaFilename = filename
 		}
 
+		// Extract quoted/referenced message media.
+		for _, item := range m.ItemList {
+			if item.RefMsg == nil || item.RefMsg.MessageItem == nil {
+				continue
+			}
+			ref := item.RefMsg
+			if ref.Title != "" {
+				msg.QuotedSender = ref.Title
+			}
+			refItem := ref.MessageItem
+			// Extract quoted text from ref item.
+			if refItem.Type == 1 && refItem.TextItem != nil {
+				msg.QuotedText = refItem.TextItem.Text
+			}
+			// Download quoted media.
+			if mediaData, mediaType, filename := downloadWeixinMedia(creds, []weixin.MessageItem{*refItem}); mediaData != nil {
+				msg.QuotedMediaData = mediaData
+				msg.QuotedMediaType = mediaType
+				msg.QuotedMediaFilename = filename
+			}
+			break
+		}
+
 		msgs = append(msgs, msg)
 	}
 

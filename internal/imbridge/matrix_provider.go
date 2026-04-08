@@ -112,14 +112,19 @@ func matrixMsgsToInbound(matrixMsgs []MatrixMessage) []InboundMessage {
 			meta["mentioned"] = "true"
 		}
 		msgs = append(msgs, InboundMessage{
-			FromUserID:    m.RoomID + "@matrix",
-			SenderName:    m.SenderID,
-			Text:          m.Text,
-			IsGroup:       !m.IsDM,
-			MediaData:     m.MediaData,
-			MediaType:     m.MediaType,
-			MediaFilename: m.MediaFilename,
-			Metadata:      meta,
+			FromUserID:          m.RoomID + "@matrix",
+			SenderName:          m.SenderID,
+			Text:                m.Text,
+			IsGroup:             !m.IsDM,
+			MediaData:           m.MediaData,
+			MediaType:           m.MediaType,
+			MediaFilename:       m.MediaFilename,
+			Metadata:            meta,
+			QuotedText:          m.QuotedText,
+			QuotedMediaData:     m.QuotedMediaData,
+			QuotedMediaType:     m.QuotedMediaType,
+			QuotedMediaFilename: m.QuotedMediaFilename,
+			QuotedSender:        m.QuotedSender,
 		})
 	}
 	return msgs

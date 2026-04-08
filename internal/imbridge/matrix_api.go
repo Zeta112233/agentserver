@@ -41,6 +41,12 @@ type MatrixMessage struct {
 	MediaData     []byte
 	MediaType     string
 	MediaFilename string
+	// Quoted/replied-to message content (from m.in_reply_to).
+	QuotedText          string
+	QuotedMediaData     []byte
+	QuotedMediaType     string
+	QuotedMediaFilename string
+	QuotedSender        string
 }
 
 // newMatrixClient creates a short-lived mautrix client for a single API call.
@@ -122,18 +128,70 @@ func MatrixSync(ctx context.Context, homeserverURL, accessToken, selfUserID, sin
 				mentioned = true
 			}
 
-			messages = append(messages, MatrixMessage{
+			msg := MatrixMessage{
 				RoomID:    string(roomID),
 				EventID:   string(evt.ID),
 				SenderID:  string(evt.Sender),
 				Text:      msgContent.Body,
 				Timestamp: evt.Timestamp,
 				Mentioned: mentioned,
-			})
+			}
+
+			// Fetch quoted/replied-to message content.
+			if replyTo := msgContent.RelatesTo.GetReplyTo(); replyTo != "" {
+				qText, qMedia, qType, qFname, qSender := fetchReplyContent(ctx, client, id.RoomID(roomID), replyTo)
+				msg.QuotedText = qText
+				msg.QuotedMediaData = qMedia
+				msg.QuotedMediaType = qType
+				msg.QuotedMediaFilename = qFname
+				msg.QuotedSender = qSender
+			}
+
+			messages = append(messages, msg)
 		}
 	}
 
 	return messages, resp.NextBatch, nil
+}
+
+// fetchReplyContent fetches the replied-to event and extracts its text and media (plaintext path).
+func fetchReplyContent(ctx context.Context, client *mautrix.Client, roomID id.RoomID, eventID id.EventID) (text string, mediaData []byte, mediaType string, filename string, sender string) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	evt, err := client.GetEvent(ctx, roomID, eventID)
+	if err != nil {
+		log.Printf("matrix: fetch reply event %s failed: %v", eventID, err)
+		return
+	}
+	sender = string(evt.Sender)
+
+	if err := evt.Content.ParseRaw(evt.Type); err != nil {
+		return
+	}
+	msgContent := evt.Content.AsMessage()
+	if msgContent == nil {
+		return
+	}
+
+	text = msgContent.Body
+
+	switch msgContent.MsgType {
+	case event.MsgImage, event.MsgFile, event.MsgVideo, event.MsgAudio:
+		mediaType = string(msgContent.MsgType)
+		filename = msgContent.GetFileName()
+		if msgContent.URL != "" {
+			mxc, parseErr := msgContent.URL.Parse()
+			if parseErr == nil {
+				mediaData, err = client.DownloadBytes(ctx, mxc)
+				if err != nil {
+					log.Printf("matrix: download reply media failed: %v", err)
+					mediaData = nil
+				}
+			}
+		}
+	}
+	return
 }
 
 // MatrixSendText sends a text message to a Matrix room.

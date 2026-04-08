@@ -114,6 +114,39 @@ func (p *TelegramProvider) Poll(ctx context.Context, creds *Credentials, cursor 
 			}
 		}
 
+		// Extract quoted/replied-to message content.
+		if reply := u.Message.ReplyToMessage; reply != nil {
+			msg.QuotedSender = ""
+			if reply.From != nil {
+				msg.QuotedSender = reply.From.Username
+				if msg.QuotedSender == "" {
+					msg.QuotedSender = reply.From.FirstName
+				}
+			}
+			msg.QuotedText = reply.Text
+			if msg.QuotedText == "" {
+				msg.QuotedText = reply.Caption
+			}
+			// Download quoted photo or document.
+			if len(reply.Photo) > 0 {
+				best := reply.Photo[len(reply.Photo)-1]
+				if data, err := TelegramGetFile(ctx, baseURL, creds.BotToken, best.FileID); err == nil {
+					msg.QuotedMediaData = data
+					msg.QuotedMediaType = "image"
+				} else {
+					log.Printf("imbridge: telegram quoted photo download failed: %v", err)
+				}
+			} else if reply.Document != nil {
+				if data, err := TelegramGetFile(ctx, baseURL, creds.BotToken, reply.Document.FileID); err == nil {
+					msg.QuotedMediaData = data
+					msg.QuotedMediaType = "file"
+					msg.QuotedMediaFilename = reply.Document.FileName
+				} else {
+					log.Printf("imbridge: telegram quoted document download failed: %v", err)
+				}
+			}
+		}
+
 		msgs = append(msgs, msg)
 	}
 

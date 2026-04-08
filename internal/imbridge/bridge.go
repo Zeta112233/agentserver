@@ -343,6 +343,21 @@ func (b *Bridge) forwardToNanoClaw(ctx context.Context, binding BridgeBinding, m
 			payload["media_filename"] = msg.MediaFilename
 		}
 	}
+	if msg.QuotedText != "" || len(msg.QuotedMediaData) > 0 {
+		if msg.QuotedText != "" {
+			payload["quoted_content"] = msg.QuotedText
+		}
+		if msg.QuotedSender != "" {
+			payload["quoted_sender"] = msg.QuotedSender
+		}
+		if len(msg.QuotedMediaData) > 0 {
+			payload["quoted_media_data"] = base64.StdEncoding.EncodeToString(msg.QuotedMediaData)
+			payload["quoted_media_type"] = msg.QuotedMediaType
+			if msg.QuotedMediaFilename != "" {
+				payload["quoted_media_filename"] = msg.QuotedMediaFilename
+			}
+		}
+	}
 
 	body, err := json.Marshal(payload)
 	if err != nil {

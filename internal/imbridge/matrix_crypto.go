@@ -200,6 +200,16 @@ func (cc *MatrixCryptoClient) SyncAndDecrypt(ctx context.Context, selfUserID str
 				}
 			}
 
+			// Fetch quoted/replied-to message content.
+			if replyTo := msgContent.RelatesTo.GetReplyTo(); replyTo != "" {
+				qText, qMedia, qType, qFname, qSender := cc.fetchReplyContent(ctx, mach, id.RoomID(roomID), replyTo)
+				msg.QuotedText = qText
+				msg.QuotedMediaData = qMedia
+				msg.QuotedMediaType = qType
+				msg.QuotedMediaFilename = qFname
+				msg.QuotedSender = qSender
+			}
+
 			messages = append(messages, msg)
 		}
 	}
@@ -321,6 +331,52 @@ func (cc *MatrixCryptoClient) downloadMedia(ctx context.Context, content *event.
 	}
 
 	return nil, "", ""
+}
+
+// fetchReplyContent fetches a replied-to event, decrypting if needed, and extracts text/media.
+func (cc *MatrixCryptoClient) fetchReplyContent(ctx context.Context, mach *crypto.OlmMachine, roomID id.RoomID, eventID id.EventID) (text string, mediaData []byte, mediaType string, filename string, sender string) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	evt, err := cc.client.GetEvent(ctx, roomID, eventID)
+	if err != nil {
+		log.Printf("matrix: fetch reply event %s failed: %v", eventID, err)
+		return
+	}
+	sender = string(evt.Sender)
+
+	// Decrypt if the event is encrypted.
+	if evt.Type == event.EventEncrypted {
+		if parseErr := evt.Content.ParseRaw(evt.Type); parseErr != nil {
+			return
+		}
+		decrypted, decErr := mach.DecryptMegolmEvent(ctx, evt)
+		if decErr != nil {
+			log.Printf("matrix: decrypt reply event %s failed: %v", eventID, decErr)
+			return
+		}
+		evt = decrypted
+	}
+
+	if err := evt.Content.ParseRaw(evt.Type); err != nil {
+		return
+	}
+	msgContent := evt.Content.AsMessage()
+	if msgContent == nil {
+		return
+	}
+
+	text = msgContent.Body
+
+	switch msgContent.MsgType {
+	case event.MsgImage, event.MsgFile, event.MsgVideo, event.MsgAudio:
+		if data, mtype, fname := cc.downloadMedia(ctx, msgContent); data != nil {
+			mediaData = data
+			mediaType = mtype
+			filename = fname
+		}
+	}
+	return
 }
 
 // MatrixCryptoManager manages long-lived E2EE Matrix clients per device.
