@@ -124,3 +124,131 @@ func BridgeTerminalStream(stream net.Conn, p *ClaudeCodePTY) {
 
 	<-done
 }
+
+const replayBufferSize = 256 * 1024 // 256KB replay buffer
+
+// TerminalMux multiplexes a single PTY to one active stream at a time,
+// maintaining a replay buffer so reconnecting clients see previous output.
+type TerminalMux struct {
+	pty    *ClaudeCodePTY
+	mu     sync.Mutex
+	active net.Conn   // currently active stream (nil if none)
+	buf    []byte     // circular replay buffer contents
+	done   chan struct{}
+}
+
+// NewTerminalMux creates a multiplexer for the given PTY and starts
+// reading PTY output in the background.
+func NewTerminalMux(p *ClaudeCodePTY) *TerminalMux {
+	m := &TerminalMux{
+		pty:  p,
+		done: make(chan struct{}),
+	}
+	go m.readLoop()
+	return m
+}
+
+// readLoop continuously reads PTY output, appends to the replay buffer,
+// and forwards to the active stream.
+func (m *TerminalMux) readLoop() {
+	defer close(m.done)
+	buf := make([]byte, 4096)
+	for {
+		n, err := m.pty.Read(buf)
+		if err != nil {
+			return
+		}
+		data := buf[:n]
+
+		m.mu.Lock()
+		// Append to replay buffer, cap at max size.
+		m.buf = append(m.buf, data...)
+		if len(m.buf) > replayBufferSize {
+			m.buf = m.buf[len(m.buf)-replayBufferSize:]
+		}
+		// Forward to active stream.
+		if m.active != nil {
+			frame := make([]byte, 1+n)
+			frame[0] = 0x00
+			copy(frame[1:], data)
+			if _, err := m.active.Write(frame); err != nil {
+				m.active = nil // stream broken, detach
+			}
+		}
+		m.mu.Unlock()
+	}
+}
+
+// Attach connects a new terminal stream. The previous stream (if any)
+// is closed, the replay buffer is sent to the new stream, and input
+// from the new stream is forwarded to the PTY.
+func (m *TerminalMux) Attach(stream net.Conn) {
+	m.mu.Lock()
+	if m.active != nil {
+		m.active.Close()
+	}
+	m.active = stream
+
+	// Replay buffered output.
+	if len(m.buf) > 0 {
+		frame := make([]byte, 1+len(m.buf))
+		frame[0] = 0x00
+		copy(frame[1:], m.buf)
+		stream.Write(frame)
+	}
+	m.mu.Unlock()
+
+	// Read input from stream → PTY (blocks until stream closes).
+	inputBuf := make([]byte, 4096)
+	for {
+		n, err := stream.Read(inputBuf)
+		if err != nil {
+			break
+		}
+		if n == 0 {
+			continue
+		}
+		switch inputBuf[0] {
+		case 0x01:
+			var cmd struct {
+				Type string `json:"type"`
+				Cols uint16 `json:"cols"`
+				Rows uint16 `json:"rows"`
+			}
+			if json.Unmarshal(inputBuf[1:n], &cmd) == nil && cmd.Type == "resize" {
+				if err := m.pty.Resize(cmd.Cols, cmd.Rows); err != nil {
+					log.Printf("pty resize error: %v", err)
+				}
+			}
+		default:
+			data := inputBuf[1:n]
+			if len(data) > 0 {
+				m.pty.Write(data)
+			}
+		}
+	}
+
+	// Detach this stream if it's still the active one.
+	m.mu.Lock()
+	if m.active == stream {
+		m.active = nil
+	}
+	m.mu.Unlock()
+}
+
+// IsAlive reports whether the underlying PTY is still running.
+func (m *TerminalMux) IsAlive() bool {
+	return m.pty.IsAlive()
+}
+
+// Close shuts down the PTY and waits for the read loop to finish.
+func (m *TerminalMux) Close() {
+	m.mu.Lock()
+	if m.active != nil {
+		m.active.Close()
+		m.active = nil
+	}
+	m.mu.Unlock()
+	m.pty.Close()
+	<-m.done
+}

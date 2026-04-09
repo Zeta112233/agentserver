@@ -124,41 +124,41 @@ func RunClaudeCode(opts ClaudeCodeOptions) {
 	}
 	defer CleanupSession(session)
 
-	// PTY management: start Claude Code lazily on first terminal stream.
-	var ptyMu sync.Mutex
-	var ptyInstance *ClaudeCodePTY
+	// Terminal mux: multiplexes PTY to one stream at a time with replay buffer.
+	var muxMu sync.Mutex
+	var termMux *TerminalMux
 
 	tunnelClient := NewClient(session.ServerURL, session.SandboxID, session.TunnelToken, "", "", opts.WorkDir)
 	tunnelClient.BackendType = "claudecode"
 
 	// Set up terminal stream handler.
 	tunnelClient.OnTerminalStream = func(stream net.Conn) {
-		ptyMu.Lock()
-		if ptyInstance != nil && !ptyInstance.IsAlive() {
+		muxMu.Lock()
+		if termMux != nil && !termMux.IsAlive() {
 			log.Printf("Claude Code PTY exited, will restart on next connection")
-			ptyInstance.Close()
-			ptyInstance = nil
+			termMux.Close()
+			termMux = nil
 		}
-		if ptyInstance == nil {
+		if termMux == nil {
 			log.Printf("Starting Claude Code PTY...")
 			claudeBin := opts.ClaudeBin
 			if claudeBin == "" {
 				claudeBin = "claude"
 			}
-			var err error
-			ptyInstance, err = NewClaudeCodePTY(claudeBin, opts.WorkDir, 120, 40)
+			p, err := NewClaudeCodePTY(claudeBin, opts.WorkDir, 120, 40)
 			if err != nil {
-				ptyMu.Unlock()
+				muxMu.Unlock()
 				log.Printf("Failed to start Claude Code: %v", err)
 				stream.Close()
 				return
 			}
+			termMux = NewTerminalMux(p)
 			log.Printf("Claude Code PTY started")
 		}
-		p := ptyInstance
-		ptyMu.Unlock()
+		m := termMux
+		muxMu.Unlock()
 
-		BridgeTerminalStream(stream, p)
+		m.Attach(stream)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -171,11 +171,11 @@ func RunClaudeCode(opts ClaudeCodeOptions) {
 		sig := <-sigCh
 		log.Printf("Received %v, disconnecting...", sig)
 		cancel()
-		ptyMu.Lock()
-		if ptyInstance != nil {
-			ptyInstance.Close()
+		muxMu.Lock()
+		if termMux != nil {
+			termMux.Close()
 		}
-		ptyMu.Unlock()
+		muxMu.Unlock()
 	}()
 
 	// Auto-register agent card.
@@ -207,11 +207,11 @@ func RunClaudeCode(opts ClaudeCodeOptions) {
 		log.Fatalf("Agent error: %v", err)
 	}
 
-	ptyMu.Lock()
-	if ptyInstance != nil {
-		ptyInstance.Close()
+	muxMu.Lock()
+	if termMux != nil {
+		termMux.Close()
 	}
-	ptyMu.Unlock()
+	muxMu.Unlock()
 
 	fmt.Println("Claude Code agent disconnected.")
 	fmt.Printf("To resume this session: agentserver --resume %s\n", session.SandboxID)
