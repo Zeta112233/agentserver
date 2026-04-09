@@ -404,12 +404,8 @@ fs.writeFileSync(path, JSON.stringify(existing, null, 2));
 		sandboxImage = m.cfg.ClaudeCodeImage
 		containerPort = m.cfg.ClaudeCodePort
 
-		// Claude Code uses Anthropic SDK which appends /v1/messages.
-		claudeProxyURL := strings.TrimSuffix(proxyBaseURL, "/v1")
-		containerEnv = append(containerEnv,
-			corev1.EnvVar{Name: "ANTHROPIC_BASE_URL", Value: claudeProxyURL},
-			corev1.EnvVar{Name: "ANTHROPIC_API_KEY", Value: opts.ProxyToken},
-		)
+		// ANTHROPIC_BASE_URL and ANTHROPIC_API_KEY are already injected by
+		// the common LLM provider block above (with /v1 stripped).
 
 		// MCP bridge config: agentserver URL + auth for discover_agents/delegate_task
 		agentserverURL := m.cfg.NanoclawBridgeBaseURL // reuse the internal agentserver URL
