@@ -193,23 +193,23 @@ func (m *TerminalMux) Attach(stream net.Conn) {
 	if m.active != nil {
 		m.active.Close()
 	}
-	m.active = stream
+	// Don't set active yet — replay must complete first so readLoop
+	// doesn't write new data before the replay reaches the browser.
+	m.active = nil
 
-	// Snapshot buffer for replay outside the lock.
-	var replay []byte
+	// Replay buffered output while holding the lock. The new stream is
+	// fresh (not congested), so this write is fast. Holding the lock
+	// guarantees replay completes before readLoop writes any live data.
 	if len(m.buf) > 0 {
-		replay = make([]byte, len(m.buf))
-		copy(replay, m.buf)
-	}
-	m.mu.Unlock()
-
-	// Replay buffered output (outside lock to avoid blocking readLoop).
-	if len(replay) > 0 {
-		frame := make([]byte, 1+len(replay))
+		frame := make([]byte, 1+len(m.buf))
 		frame[0] = 0x00
-		copy(frame[1:], replay)
+		copy(frame[1:], m.buf)
 		stream.Write(frame)
 	}
+
+	// Now activate — readLoop will start forwarding live output.
+	m.active = stream
+	m.mu.Unlock()
 
 	// Read input from stream → PTY (blocks until stream closes).
 	inputBuf := make([]byte, 4096)
