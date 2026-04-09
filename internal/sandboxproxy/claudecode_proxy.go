@@ -96,6 +96,25 @@ func (s *Server) handleClaudeCodeSubdomainProxy(w http.ResponseWriter, r *http.R
 
 	// Cloud sandbox: reverse proxy to ttyd on pod IP.
 	if sbx.PodIP != "" {
+		// For WebSocket connections (terminal), keep activity alive so the
+		// idle watcher doesn't pause the sandbox while the user is connected.
+		if r.Header.Get("Upgrade") != "" {
+			done := make(chan struct{})
+			go func() {
+				ticker := time.NewTicker(30 * time.Second)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-done:
+						return
+					case <-ticker.C:
+						s.throttledActivity(sbx.ID)
+					}
+				}
+			}()
+			defer close(done)
+		}
+
 		target := &url.URL{
 			Scheme: "http",
 			Host:   sbx.PodIP + ":" + claudecodePort,
