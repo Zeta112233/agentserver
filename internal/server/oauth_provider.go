@@ -195,6 +195,12 @@ func (s *Server) handleOAuthConsentSubmit(w http.ResponseWriter, r *http.Request
 
 // handleOAuthDeviceAccept accepts a device challenge after the user confirms the user_code.
 func (s *Server) handleOAuthDeviceAccept(w http.ResponseWriter, r *http.Request) {
+	// Require authentication — only a logged-in user can approve a device.
+	if _, ok := s.Auth.ValidateRequest(r); !ok {
+		http.Error(w, "not authenticated", http.StatusUnauthorized)
+		return
+	}
+
 	var req struct {
 		DeviceChallenge string `json:"device_challenge"`
 		UserCode        string `json:"user_code"`

@@ -13,10 +13,9 @@ export function OAuthLogin({ challenge }: OAuthLoginProps) {
   const [autoSubmitting, setAutoSubmitting] = useState(false)
 
   // Persist challenge in sessionStorage so it survives OIDC redirects.
-  sessionStorage.setItem(PENDING_LOGIN_CHALLENGE_KEY, challenge)
-
-  // If the user is already authenticated, auto-submit the challenge.
+  // If already authed, auto-submit instead of showing login form.
   useEffect(() => {
+    sessionStorage.setItem(PENDING_LOGIN_CHALLENGE_KEY, challenge)
     checkAuth().then(async (ok) => {
       if (ok) {
         setAutoSubmitting(true)

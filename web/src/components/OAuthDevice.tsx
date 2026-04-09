@@ -31,8 +31,11 @@ export function OAuthDevice({ challenge, userCode }: OAuthDeviceProps) {
     }
   }
 
+  const [denied, setDenied] = useState(false)
+
   const handleDeny = () => {
-    window.close()
+    setDenied(true)
+    window.close() // May not work if page was not opened by JS.
   }
 
   return (
@@ -56,6 +59,12 @@ export function OAuthDevice({ challenge, userCode }: OAuthDeviceProps) {
 
         {error && (
           <div className="text-sm text-red-500 text-center">{error}</div>
+        )}
+
+        {denied && (
+          <div className="text-sm text-[var(--muted-foreground)] text-center">
+            Authorization denied. You can close this tab.
+          </div>
         )}
 
         <div className="flex gap-3 justify-end">

@@ -19,6 +19,7 @@ import { OAuthDevice } from './components/OAuthDevice'
 import { OAuthLogin, PENDING_LOGIN_CHALLENGE_KEY } from './components/OAuthLogin'
 
 const PENDING_CONSENT_CHALLENGE_KEY = 'agentserver_pending_consent_challenge'
+const PENDING_DEVICE_PARAMS_KEY = 'agentserver_pending_device_params'
 import { TopBar } from './components/TopBar'
 import { SandboxList } from './components/SandboxList'
 import { SandboxDetail } from './components/SandboxDetail'
@@ -128,8 +129,13 @@ export default function App() {
         const pendingConsent = sessionStorage.getItem(PENDING_CONSENT_CHALLENGE_KEY)
         if (pendingConsent) {
           sessionStorage.removeItem(PENDING_CONSENT_CHALLENGE_KEY)
-          // Redirect back to the consent page with the challenge.
           window.location.href = `/oauth2/consent?consent_challenge=${encodeURIComponent(pendingConsent)}`
+          return
+        }
+        const pendingDevice = sessionStorage.getItem(PENDING_DEVICE_PARAMS_KEY)
+        if (pendingDevice) {
+          sessionStorage.removeItem(PENDING_DEVICE_PARAMS_KEY)
+          window.location.href = `/oauth2/device${pendingDevice}`
           return
         }
         listWorkspaces().then((ws) => {
@@ -209,13 +215,10 @@ export default function App() {
     setSandboxes((prev) => prev.map((s) => (s.id === id ? { ...s, name } : s)))
   }, [])
 
-  // OAuth login and device pages bypass the auth guard — they handle their own auth.
-  // Consent page stays behind the guard (user is already authed by that point in the Hydra flow).
+  // OAuth login page bypasses the auth guard — it embeds its own Login component.
+  // Device and consent pages stay behind the guard (user must be authenticated to approve).
   if (location.pathname === '/oauth2/login') {
     return <OAuthLoginRoute />
-  }
-  if (location.pathname === '/oauth2/device') {
-    return <OAuthDeviceRoute />
   }
 
   if (authed === null) {
@@ -227,14 +230,17 @@ export default function App() {
   }
 
   if (!authed) {
-    // If landing on /oauth2/consent without auth (e.g. session expired),
-    // save the challenge so it survives OIDC redirects.
+    // If landing on protected OAuth pages without auth, save params
+    // so they survive OIDC redirects.
     if (location.pathname === '/oauth2/consent') {
       const params = new URLSearchParams(location.search)
       const challenge = params.get('consent_challenge')
       if (challenge) {
         sessionStorage.setItem(PENDING_CONSENT_CHALLENGE_KEY, challenge)
       }
+    }
+    if (location.pathname === '/oauth2/device') {
+      sessionStorage.setItem(PENDING_DEVICE_PARAMS_KEY, location.search)
     }
     return (
       <Login
@@ -323,6 +329,7 @@ export default function App() {
           element={<AdminPanel />}
         />
         <Route path="/oauth2/consent" element={<OAuthConsentRoute />} />
+        <Route path="/oauth2/device" element={<OAuthDeviceRoute />} />
         <Route path="*" element={selectedWorkspaceId ? <Navigate to={`/w/${selectedWorkspaceId}`} replace /> : null} />
       </Routes>
     </div>
