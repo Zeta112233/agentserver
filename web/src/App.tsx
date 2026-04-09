@@ -200,16 +200,13 @@ export default function App() {
     setSandboxes((prev) => prev.map((s) => (s.id === id ? { ...s, name } : s)))
   }, [])
 
-  // OAuth pages bypass the auth guard — they handle their own authentication.
-  if (location.pathname.startsWith('/oauth2/')) {
-    return (
-      <Routes>
-        <Route path="/oauth2/login" element={<OAuthLoginRoute />} />
-        <Route path="/oauth2/consent" element={<OAuthConsentRoute />} />
-        <Route path="/oauth2/device" element={<OAuthDeviceRoute />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-    )
+  // OAuth login and device pages bypass the auth guard — they handle their own auth.
+  // Consent page stays behind the guard (user is already authed by that point in the Hydra flow).
+  if (location.pathname === '/oauth2/login') {
+    return <OAuthLoginRoute />
+  }
+  if (location.pathname === '/oauth2/device') {
+    return <OAuthDeviceRoute />
   }
 
   if (authed === null) {
@@ -307,6 +304,7 @@ export default function App() {
           path="/admin/*"
           element={<AdminPanel />}
         />
+        <Route path="/oauth2/consent" element={<OAuthConsentRoute />} />
         <Route path="*" element={selectedWorkspaceId ? <Navigate to={`/w/${selectedWorkspaceId}`} replace /> : null} />
       </Routes>
     </div>
