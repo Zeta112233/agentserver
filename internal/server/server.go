@@ -197,6 +197,10 @@ func (s *Server) Router() http.Handler {
 	r.Get("/api/agent/tasks/poll", s.handlePollTasks)
 	r.Put("/api/agent/tasks/{id}/status", s.handleUpdateTaskStatus)
 
+	// Agent mailbox (auth via proxy_token).
+	r.Post("/api/agent/mailbox/send", s.handleSendMessage)
+	r.Get("/api/agent/mailbox/inbox", s.handleReadInbox)
+
 	// Auth endpoints (no auth required)
 	if s.PasswordAuthEnabled {
 		r.Post("/api/auth/login", s.handleLogin)
@@ -311,6 +315,9 @@ func (s *Server) Router() http.Handler {
 		r.Get("/api/tasks/{id}", s.handleGetTask)
 		r.Post("/api/tasks/{id}/cancel", s.handleCancelTask)
 		r.Get("/api/tasks/{id}/stream", s.handleTaskStream)
+
+		// Agent interaction audit trail
+		r.Get("/api/workspaces/{wid}/agent-interactions", s.handleListInteractions)
 
 		// Admin routes
 		r.Route("/api/admin", func(r chi.Router) {

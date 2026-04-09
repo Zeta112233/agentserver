@@ -152,6 +152,10 @@ spec:
             - name: CLAUDECODE_RUNTIME_CLASS
               value: {{ .Values.sandbox.claudecode.runtimeClassName | quote }}
             {{- end }}
+            {{- if .Values.sandbox.claudecode.image }}
+            - name: AGENTSERVER_INTERNAL_URL
+              value: {{ printf "http://%s.%s.svc:%v" .Release.Name .Release.Namespace (int .Values.service.port) | quote }}
+            {{- end }}
             {{- if .Values.sandbox.nanoclaw.image }}
             - name: NANOCLAW_IMAGE
               value: {{ .Values.sandbox.nanoclaw.image | quote }}

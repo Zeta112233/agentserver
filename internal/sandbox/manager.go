@@ -408,7 +408,7 @@ fs.writeFileSync(path, JSON.stringify(existing, null, 2));
 		// the common LLM provider block above (with /v1 stripped).
 
 		// MCP bridge config: agentserver URL + auth for discover_agents/delegate_task
-		agentserverURL := m.cfg.NanoclawBridgeBaseURL // reuse the internal agentserver URL
+		agentserverURL := m.cfg.AgentServerInternalURL
 		if agentserverURL == "" {
 			agentserverURL = "http://agentserver:8080"
 		}

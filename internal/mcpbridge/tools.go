@@ -117,24 +117,27 @@ func (b *Bridge) Tools() []ToolDef {
 		},
 		{
 			Name:        "send_message",
-			description: "Send a message to another agent's mailbox. (Not yet implemented — coming soon.)",
+			description: "Send a message to another agent's mailbox for async communication.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"to":   map[string]any{"type": "string", "description": "Target agent ID"},
-					"text": map[string]any{"type": "string", "description": "Message text"},
+					"to":       map[string]any{"type": "string", "description": "Target agent ID (sandbox ID)"},
+					"text":     map[string]any{"type": "string", "description": "Message text"},
+					"msg_type": map[string]any{"type": "string", "description": "Message type (default: text)"},
 				},
 				"required": []string{"to", "text"},
 			},
 		},
 		{
 			Name:        "read_inbox",
-			description: "Read messages from your inbox. (Not yet implemented — coming soon.)",
+			description: "Read unread messages from your inbox. Messages are marked as read after retrieval.",
 			InputSchema: map[string]any{
 				"type": "object",
-				"properties": map[string]any{},
+				"properties": map[string]any{
+					"limit": map[string]any{"type": "integer", "description": "Max messages to return (default: 10)"},
+				},
 			},
-			Annotations: map[string]any{"readOnlyHint": true},
+			Annotations: map[string]any{"readOnlyHint": false},
 		},
 	}
 }
@@ -149,9 +152,9 @@ func (b *Bridge) HandleTool(name string, args json.RawMessage) (*ToolResult, err
 	case "check_task":
 		return b.handleCheckTask(args)
 	case "send_message":
-		return errorResult("send_message is not yet implemented"), nil
+		return b.handleSendMessage(args)
 	case "read_inbox":
-		return errorResult("read_inbox is not yet implemented"), nil
+		return b.handleReadInbox(args)
 	default:
 		return nil, fmt.Errorf("unknown tool: %s", name)
 	}
@@ -241,6 +244,59 @@ func (b *Bridge) handleCheckTask(args json.RawMessage) (*ToolResult, error) {
 	}
 
 	return textResult(summary), nil
+}
+
+func (b *Bridge) handleSendMessage(args json.RawMessage) (*ToolResult, error) {
+	var params struct {
+		To      string `json:"to"`
+		Text    string `json:"text"`
+		MsgType string `json:"msg_type"`
+	}
+	if err := json.Unmarshal(args, &params); err != nil {
+		return errorResult("Invalid arguments: " + err.Error()), nil
+	}
+	if params.MsgType == "" {
+		params.MsgType = "text"
+	}
+
+	url := fmt.Sprintf("%s/api/agent/mailbox/send", b.config.ServerURL)
+	respBody, err := b.apiPost(url, map[string]any{
+		"to": params.To, "text": params.Text, "msg_type": params.MsgType,
+	})
+	if err != nil {
+		return errorResult(fmt.Sprintf("Failed to send message: %v", err)), nil
+	}
+
+	var result struct {
+		MessageID string `json:"message_id"`
+		Status    string `json:"status"`
+	}
+	json.Unmarshal(respBody, &result)
+	return textResult(fmt.Sprintf("Message sent (ID: %s)", result.MessageID)), nil
+}
+
+func (b *Bridge) handleReadInbox(args json.RawMessage) (*ToolResult, error) {
+	url := fmt.Sprintf("%s/api/agent/mailbox/inbox", b.config.ServerURL)
+
+	var params struct {
+		Limit int `json:"limit"`
+	}
+	json.Unmarshal(args, &params)
+	if params.Limit > 0 {
+		url += fmt.Sprintf("?limit=%d", params.Limit)
+	}
+
+	body, err := b.apiGet(url)
+	if err != nil {
+		return errorResult(fmt.Sprintf("Failed to read inbox: %v", err)), nil
+	}
+
+	var msgs []json.RawMessage
+	json.Unmarshal(body, &msgs)
+	if len(msgs) == 0 {
+		return textResult("No new messages in your inbox."), nil
+	}
+	return textResult(string(body)), nil
 }
 
 // --- HTTP helpers ---

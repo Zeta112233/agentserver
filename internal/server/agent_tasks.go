@@ -74,6 +74,15 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	actor := req.RequesterID
+	var actorPtr *string
+	if actor != "" {
+		actorPtr = &actor
+	}
+	s.logInteraction(wid, actorPtr, "task_created", taskID, "task", map[string]any{
+		"target_id": req.TargetID, "skill": req.Skill,
+	})
+
 	// Create a bridge session for the task if BridgeHandler is available.
 	var sessionID string
 	if s.BridgeHandler != nil {
@@ -276,8 +285,6 @@ func (s *Server) handleUpdateTaskStatus(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	_ = sbx
-
 	taskID := chi.URLParam(r, "id")
 	var req struct {
 		Status        string `json:"status"`
@@ -300,6 +307,10 @@ func (s *Server) handleUpdateTaskStatus(w http.ResponseWriter, r *http.Request) 
 	} else {
 		s.DB.UpdateAgentTaskStatus(taskID, req.Status)
 	}
+
+	s.logInteraction(sbx.WorkspaceID, &sbx.ID, "task_status_changed", taskID, "task", map[string]any{
+		"status": req.Status,
+	})
 
 	w.WriteHeader(http.StatusOK)
 }
@@ -324,6 +335,8 @@ func (s *Server) handleCancelTask(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+
+	s.logInteraction(task.WorkspaceID, nil, "task_cancelled", taskID, "task", nil)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "cancelled"})
