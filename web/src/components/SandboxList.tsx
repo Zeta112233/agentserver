@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
-import { Plus, Trash2, Pause, Play, Loader2, Laptop, Box, Download, ExternalLink } from 'lucide-react'
+import { Plus, Trash2, Pause, Play, Loader2, Laptop, Box, ExternalLink } from 'lucide-react'
 import {
   type Sandbox,
   createSandbox,
@@ -308,37 +308,20 @@ export function SandboxList({
                   <div className="mt-1 w-px flex-1 bg-[var(--border)]" />
                 </div>
                 <div className="pb-5">
-                  <p className="text-sm font-semibold text-[var(--foreground)]">Prerequisites</p>
-                  <div className="mt-1.5 flex flex-col gap-1.5 text-sm text-[var(--muted-foreground)]">
-                    <p className="flex items-start gap-1.5">
-                      <Download size={14} className="mt-0.5 shrink-0" />
-                      <span>
-                        <span className="font-medium text-[var(--foreground)]">Install agentserver CLI</span>
-                        <br />
-                        macOS / Linux: <code className="rounded bg-[var(--secondary)] px-1.5 py-0.5 text-xs text-[var(--foreground)]">brew install agentserver/tap/agentserver</code>
-                        <br />
-                        Windows / Other:{' '}
-                        <a
-                          href="https://github.com/agentserver/agentserver/releases"
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-0.5 text-[var(--foreground)] underline underline-offset-2 hover:opacity-80"
-                        >
-                          GitHub Releases <ExternalLink size={11} className="inline" />
-                        </a>
-                      </span>
-                    </p>
-                    <p className="flex items-start gap-1.5">
-                      <Download size={14} className="mt-0.5 shrink-0" />
-                      <span>
-                        <span className="font-medium text-[var(--foreground)]">Install your agent backend</span>
-                        <br />
-                        OpenCode:{' '}
-                        <a href="https://opencode.ai" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 text-[var(--foreground)] underline underline-offset-2 hover:opacity-80">opencode.ai <ExternalLink size={11} className="inline" /></a>
-                        {' · '}
-                        Claude Code:{' '}
-                        <code className="rounded bg-[var(--secondary)] px-1.5 py-0.5 text-xs text-[var(--foreground)]">npm i -g @anthropic-ai/claude-code</code>
-                      </span>
+                  <p className="text-sm font-semibold text-[var(--foreground)]">Install</p>
+                  <div className="mt-1.5 text-sm text-[var(--muted-foreground)]">
+                    <p>macOS / Linux:</p>
+                    <code className="mt-1 block rounded bg-[var(--secondary)] px-2 py-1.5 text-xs text-[var(--foreground)]">brew install agentserver/tap/agentserver</code>
+                    <p className="mt-2">
+                      Windows / Other:{' '}
+                      <a
+                        href="https://github.com/agentserver/agentserver/releases"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-0.5 text-[var(--foreground)] underline underline-offset-2 hover:opacity-80"
+                      >
+                        GitHub Releases <ExternalLink size={11} className="inline" />
+                      </a>
                     </p>
                   </div>
                 </div>
@@ -350,49 +333,23 @@ export function SandboxList({
                   <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--secondary)] text-xs font-semibold text-[var(--foreground)]">
                     2
                   </div>
-                  <div className="mt-1 w-px flex-1 bg-[var(--border)]" />
-                </div>
-                <div className="pb-5">
-                  <p className="text-sm font-semibold text-[var(--foreground)]">Login & Register</p>
-                  <p className="mt-1.5 text-sm text-[var(--muted-foreground)]">
-                    Run the following command on your local machine. A browser window will open for you to sign in and select a workspace.
-                  </p>
-                  <div className="mt-2 flex flex-col gap-2">
-                    {(() => {
-                      const serverUrl = window.location.origin
-                      const loginCommand = `agentserver-agent login --server ${serverUrl}`
-                      return (
-                        <div className="relative rounded-md bg-[var(--secondary)] p-3">
-                          <code className="block whitespace-pre-wrap break-all text-xs text-[var(--foreground)]">
-                            {loginCommand}
-                          </code>
-                          <button
-                            onClick={() => navigator.clipboard.writeText(loginCommand)}
-                            className="absolute right-2 top-2 rounded px-2 py-1 text-xs text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
-                          >
-                            Copy
-                          </button>
-                        </div>
-                      )
-                    })()}
-                  </div>
-                  <p className="mt-2 text-xs text-[var(--muted-foreground)]">
-                    If the browser doesn't open automatically, the CLI will display a URL and QR code for manual access.
-                  </p>
-                </div>
-              </div>
-
-              {/* Step 3 */}
-              <div className="flex gap-3">
-                <div className="flex flex-col items-center">
-                  <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--secondary)] text-xs font-semibold text-[var(--foreground)]">
-                    3
-                  </div>
                 </div>
                 <div>
-                  <p className="text-sm font-semibold text-[var(--foreground)]">Done</p>
-                  <p className="mt-1.5 text-xs text-[var(--muted-foreground)]">
-                    After authentication, the agent will be automatically registered in your chosen workspace and start connecting.
+                  <p className="text-sm font-semibold text-[var(--foreground)]">Run</p>
+                  <p className="mt-1.5 text-sm text-[var(--muted-foreground)]">
+                    Run on your local machine:
+                  </p>
+                  <div className="relative mt-2 rounded-md bg-[var(--secondary)] p-3">
+                    <code className="block text-xs text-[var(--foreground)]">agentserver</code>
+                    <button
+                      onClick={() => navigator.clipboard.writeText('agentserver')}
+                      className="absolute right-2 top-2 rounded px-2 py-1 text-xs text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
+                    >
+                      Copy
+                    </button>
+                  </div>
+                  <p className="mt-2 text-xs text-[var(--muted-foreground)]">
+                    A browser window will open for you to sign in and select a workspace. If it doesn't open, the CLI will display a QR code.
                   </p>
                 </div>
               </div>
