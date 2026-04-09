@@ -299,7 +299,7 @@ var versionCmd = &cobra.Command{
 	Use:   "version",
 	Short: "Print the agent version",
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Printf("agentserver-agent %s\n", agent.Version)
+		fmt.Printf("agentserver %s\n", agent.Version)
 	},
 }
 

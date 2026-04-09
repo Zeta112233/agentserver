@@ -12,7 +12,7 @@ import (
 )
 
 // ErrNeedReLogin indicates all tokens have expired and interactive re-auth is needed.
-var ErrNeedReLogin = errors.New("all tokens expired, please run 'agentserver login' again")
+var ErrNeedReLogin = errors.New("all tokens expired, please run 'agentserver' to re-authenticate")
 
 // EnsureValidToken checks for a valid OAuth access token, refreshing if needed.
 // Returns the access token or ErrNeedReLogin if interactive auth is required.
