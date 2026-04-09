@@ -54,6 +54,8 @@ spec:
               value: {{ .Values.sandbox.opencode.subdomainPrefix | default "code" | quote }}
             - name: OPENCLAW_SUBDOMAIN_PREFIX
               value: {{ .Values.sandbox.openclaw.subdomainPrefix | default "claw" | quote }}
+            - name: CLAUDECODE_SUBDOMAIN_PREFIX
+              value: {{ .Values.sandbox.claudecode.subdomainPrefix | default "claude" | quote }}
           livenessProbe:
             httpGet:
               path: /healthz
