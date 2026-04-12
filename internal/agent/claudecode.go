@@ -5,11 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
-	"sync"
 	"syscall"
 	"time"
 )
@@ -25,9 +23,9 @@ type ClaudeCodeOptions struct {
 	Continue        bool   // resume most recent session
 }
 
-// RunClaudeCode executes the Claude Code agent connect workflow.
-// Each invocation registers a new sandbox (or resumes an existing one),
-// then establishes a tunnel and bridges terminal streams to a local Claude Code PTY.
+// RunClaudeCode executes the headless Claude Code agent.
+// It registers a sandbox, connects a tunnel for heartbeat, and runs a task
+// worker that executes delegated tasks via the CCR v2 bridge API.
 func RunClaudeCode(opts ClaudeCodeOptions) {
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -124,42 +122,7 @@ func RunClaudeCode(opts ClaudeCodeOptions) {
 	}
 	defer CleanupSession(session)
 
-	// Terminal mux: multiplexes PTY to one stream at a time with replay buffer.
-	var muxMu sync.Mutex
-	var termMux *TerminalMux
-
-	tunnelClient := NewClient(session.ServerURL, session.SandboxID, session.TunnelToken, "", "", opts.WorkDir)
-	tunnelClient.BackendType = "claudecode"
-
-	// Set up terminal stream handler.
-	tunnelClient.OnTerminalStream = func(stream net.Conn) {
-		muxMu.Lock()
-		if termMux != nil && !termMux.IsAlive() {
-			log.Printf("Claude Code PTY exited, will restart on next connection")
-			termMux.Close()
-			termMux = nil
-		}
-		if termMux == nil {
-			log.Printf("Starting Claude Code PTY...")
-			claudeBin := opts.ClaudeBin
-			if claudeBin == "" {
-				claudeBin = "claude"
-			}
-			p, err := NewClaudeCodePTY(claudeBin, opts.WorkDir, 120, 40)
-			if err != nil {
-				muxMu.Unlock()
-				log.Printf("Failed to start Claude Code: %v", err)
-				stream.Close()
-				return
-			}
-			termMux = NewTerminalMux(p)
-			log.Printf("Claude Code PTY started")
-		}
-		m := termMux
-		muxMu.Unlock()
-
-		m.Attach(stream)
-	}
+	tunnelClient := NewClient(session.ServerURL, session.SandboxID, session.TunnelToken, opts.WorkDir)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -171,11 +134,6 @@ func RunClaudeCode(opts ClaudeCodeOptions) {
 		sig := <-sigCh
 		log.Printf("Received %v, disconnecting...", sig)
 		cancel()
-		muxMu.Lock()
-		if termMux != nil {
-			termMux.Close()
-		}
-		muxMu.Unlock()
 	}()
 
 	// Auto-register agent card.
@@ -195,25 +153,19 @@ func RunClaudeCode(opts ClaudeCodeOptions) {
 	// Start task worker in background.
 	go RunTaskWorker(ctx, TaskWorkerOptions{
 		ServerURL:  session.ServerURL,
-		ProxyToken: session.TunnelToken,
+		ProxyToken: session.ProxyToken,
 		SandboxID:  session.SandboxID,
 		Workdir:    opts.WorkDir,
 		CLIPath:    opts.ClaudeBin,
 	})
 
-	log.Printf("Connecting to %s (Claude Code terminal agent)...", session.ServerURL)
+	log.Printf("Connecting to %s (headless agent)...", session.ServerURL)
 	if err := tunnelClient.Run(ctx); err != nil && ctx.Err() == nil {
 		CleanupSession(session)
 		log.Fatalf("Agent error: %v", err)
 	}
 
-	muxMu.Lock()
-	if termMux != nil {
-		termMux.Close()
-	}
-	muxMu.Unlock()
-
-	fmt.Println("Claude Code agent disconnected.")
+	fmt.Println("Agent disconnected.")
 	fmt.Printf("To resume this session: agentserver --resume %s\n", session.SandboxID)
 }
 

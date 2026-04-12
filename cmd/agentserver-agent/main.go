@@ -16,13 +16,8 @@ import (
 )
 
 var (
-	server        string
-	name          string
-	opencodeURL   string
-	opencodeToken string
-	autoStart     bool
-	opencodeBin   string
-	opencodePort  int
+	server string
+	name   string
 
 	// Claude Code specific flags.
 	claudeBin     string
@@ -36,8 +31,8 @@ var (
 
 var rootCmd = &cobra.Command{
 	Use:   "agentserver",
-	Short: "Connect local Claude Code agent to agentserver",
-	Long: `Authenticate and connect a local Claude Code instance to agentserver.
+	Short: "Connect headless Claude Code agent to agentserver",
+	Long: `Authenticate and connect a headless Claude Code agent to agentserver.
 
 On first run, authenticates via OAuth Device Flow and registers a new agent.
 On subsequent runs, reuses saved credentials and creates a new session.
@@ -57,30 +52,23 @@ or -c/--continue to resume the most recent one.`,
 	},
 }
 
-var connectCmd = &cobra.Command{
-	Use:   "connect",
-	Short: "Connect local opencode to agentserver",
-	Long: `Establish a WebSocket tunnel between a local opencode instance and agentserver.
+var claudecodeCmd = &cobra.Command{
+	Use:   "claudecode",
+	Short: "Connect headless Claude Code agent to agentserver",
+	Long: `Register a headless Claude Code agent with agentserver and maintain a
+tunnel for task delegation and agent discovery.
 
 On first run, authenticates via OAuth and registers a new agent.
-On subsequent runs, reuses saved credentials and creates a new session.
-
-By default, opencode serve is started automatically on --opencode-port (4096).
-Use --auto-start=false to disable this and manage opencode manually.`,
+On subsequent runs, reuses saved credentials and creates a new session.`,
 	Run: func(cmd *cobra.Command, args []string) {
-		agent.RunConnect(agent.ConnectOptions{
+		agent.RunClaudeCode(agent.ClaudeCodeOptions{
 			Server:          server,
 			Name:            name,
 			SkipOpenBrowser: skipOpenBrowser,
+			ClaudeBin:       claudeBin,
+			WorkDir:         claudeWorkDir,
 			Resume:          resumeID,
 			Continue:        continueFlag,
-			OpencodeURL:     opencodeURL,
-			OpencodeURLSet:  cmd.Flags().Changed("opencode-url"),
-			OpencodeToken:   opencodeToken,
-			AutoStart:       autoStart,
-			OpencodeBin:     opencodeBin,
-			OpencodePort:    opencodePort,
-			OpencodePortSet: cmd.Flags().Changed("opencode-port"),
 		})
 	},
 }
@@ -101,18 +89,18 @@ var listCmd = &cobra.Command{
 		}
 
 		w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-		fmt.Fprintln(w, "SANDBOX\tNAME\tTYPE\tWORKSPACE\tDIRECTORY\tACTIVE")
+		fmt.Fprintln(w, "SANDBOX\tNAME\tTYPE\tWORKSPACE\tDIRECTORY\tSTATUS")
 		for _, s := range sessions {
 			dir := s.Dir
 			if len(dir) > 35 {
 				dir = "..." + dir[len(dir)-32:]
 			}
-			active := ""
+			status := ""
 			if agent.IsSessionActive(s) {
-				active = fmt.Sprintf("PID %d", s.PID)
+				status = fmt.Sprintf("Running (PID %d)", s.PID)
 			}
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
-				truncID(s.SandboxID, 8), s.Name, s.Type, truncID(s.WorkspaceID, 8), dir, active)
+				truncID(s.SandboxID, 8), s.Name, s.Type, truncID(s.WorkspaceID, 8), dir, status)
 		}
 		w.Flush()
 	},
@@ -192,27 +180,6 @@ var removeCmd = &cobra.Command{
 		}
 
 		fmt.Printf("Removed agent registration (dir=%s, workspace=%s)\n", removeDir, wsID)
-	},
-}
-
-var claudecodeCmd = &cobra.Command{
-	Use:   "claudecode",
-	Short: "Connect local Claude Code terminal to agentserver",
-	Long: `Register a local Claude Code instance with agentserver and expose its terminal
-via WebSocket tunnel.
-
-On first run, authenticates via OAuth and registers a new agent.
-On subsequent runs, reuses saved credentials and creates a new session.`,
-	Run: func(cmd *cobra.Command, args []string) {
-		agent.RunClaudeCode(agent.ClaudeCodeOptions{
-			Server:          server,
-			Name:            name,
-			SkipOpenBrowser: skipOpenBrowser,
-			ClaudeBin:       claudeBin,
-			WorkDir:         claudeWorkDir,
-			Resume:          resumeID,
-			Continue:        continueFlag,
-		})
 	},
 }
 
@@ -304,9 +271,9 @@ var versionCmd = &cobra.Command{
 }
 
 func init() {
-	rootCmd.AddCommand(connectCmd, claudecodeCmd, loginCmd, listCmd, removeCmd, taskWorkerCmd, mcpServerCmd, versionCmd)
+	rootCmd.AddCommand(claudecodeCmd, loginCmd, listCmd, removeCmd, taskWorkerCmd, mcpServerCmd, versionCmd)
 
-	// Root command flags (default: Claude Code agent).
+	// Root command flags (default: headless Claude Code agent).
 	rootCmd.Flags().StringVar(&server, "server", "https://agent.cs.ac.cn", "Agent server URL")
 	rootCmd.Flags().StringVar(&name, "name", "", "Name for this agent (default: hostname)")
 	rootCmd.Flags().BoolVar(&skipOpenBrowser, "skip-open-browser", false, "Don't auto-open browser, show URL + QR only")
@@ -318,18 +285,6 @@ func init() {
 	// Login command flags.
 	loginCmd.Flags().StringVar(&server, "server", "https://agent.cs.ac.cn", "Agent server URL")
 	loginCmd.Flags().BoolVar(&skipOpenBrowser, "skip-open-browser", false, "Don't auto-open browser, show URL + QR only")
-
-	// Connect command flags.
-	connectCmd.Flags().StringVar(&server, "server", "", "Agent server URL")
-	connectCmd.Flags().StringVar(&name, "name", "", "Name for this agent (default: hostname)")
-	connectCmd.Flags().BoolVar(&skipOpenBrowser, "skip-open-browser", false, "Don't auto-open browser, show URL + QR only")
-	connectCmd.Flags().StringVarP(&resumeID, "resume", "r", "", "Resume a previous session by sandbox ID")
-	connectCmd.Flags().BoolVarP(&continueFlag, "continue", "c", false, "Resume the most recent session")
-	connectCmd.Flags().StringVar(&opencodeURL, "opencode-url", "", "Local opencode server URL")
-	connectCmd.Flags().StringVar(&opencodeToken, "opencode-token", "", "Local opencode server token")
-	connectCmd.Flags().BoolVar(&autoStart, "auto-start", true, "Automatically start opencode serve")
-	connectCmd.Flags().StringVar(&opencodeBin, "opencode-bin", "opencode", "Path to the opencode binary")
-	connectCmd.Flags().IntVar(&opencodePort, "opencode-port", 4096, "Port to start opencode on")
 
 	// Claudecode command flags.
 	claudecodeCmd.Flags().StringVar(&server, "server", "", "Agent server URL")

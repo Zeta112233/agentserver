@@ -7,18 +7,15 @@ import (
 	"path/filepath"
 )
 
-const basePort = 4096
-
 // RegistryEntry represents a single agent registration keyed by (Dir, WorkspaceID).
 type RegistryEntry struct {
-	Dir          string `json:"dir"`
-	Server       string `json:"server"`
-	SandboxID    string `json:"sandbox_id"`
-	TunnelToken  string `json:"tunnel_token"`
-	WorkspaceID  string `json:"workspace_id"`
-	Name         string `json:"name"`
-	Type         string `json:"type,omitempty"`         // "opencode" or "claudecode"
-	OpencodePort int    `json:"opencode_port,omitempty"`
+	Dir         string `json:"dir"`
+	Server      string `json:"server"`
+	SandboxID   string `json:"sandbox_id"`
+	TunnelToken string `json:"tunnel_token"`
+	WorkspaceID string `json:"workspace_id"`
+	Name        string `json:"name"`
+	Type        string `json:"type,omitempty"`
 }
 
 // Registry holds all agent registrations on this machine.
@@ -68,23 +65,6 @@ func (r *Registry) Remove(dir, workspaceID string) bool {
 		}
 	}
 	return false
-}
-
-// NextPort returns the lowest available port starting from basePort.
-// It finds the first gap in the used port range to reuse freed ports.
-func (r *Registry) NextPort() int {
-	if len(r.Entries) == 0 {
-		return basePort
-	}
-	used := make(map[int]bool, len(r.Entries))
-	for _, e := range r.Entries {
-		used[e.OpencodePort] = true
-	}
-	for port := basePort; ; port++ {
-		if !used[port] {
-			return port
-		}
-	}
 }
 
 // DefaultRegistryDir returns the default directory for agentserver config.

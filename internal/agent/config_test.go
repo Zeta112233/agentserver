@@ -18,7 +18,6 @@ func TestRegistryRoundTrip(t *testing.T) {
 		TunnelToken: "tok-abc",
 		WorkspaceID: "ws-1",
 		Name:        "my-agent",
-		OpencodePort: 4096,
 	}
 	reg.Put(entry)
 
@@ -52,9 +51,6 @@ func TestRegistryRoundTrip(t *testing.T) {
 	}
 	if got.Name != entry.Name {
 		t.Errorf("Name = %q, want %q", got.Name, entry.Name)
-	}
-	if got.OpencodePort != entry.OpencodePort {
-		t.Errorf("OpencodePort = %d, want %d", got.OpencodePort, entry.OpencodePort)
 	}
 }
 
@@ -192,52 +188,3 @@ func TestRegistryRemove(t *testing.T) {
 	}
 }
 
-func TestRegistryNextPort(t *testing.T) {
-	reg := &Registry{}
-
-	// Empty registry returns basePort.
-	port := reg.NextPort()
-	if port != basePort {
-		t.Errorf("NextPort on empty registry = %d, want %d", port, basePort)
-	}
-
-	// After adding an entry at basePort, returns basePort+1.
-	reg.Put(&RegistryEntry{
-		Dir:          "/home/user/project",
-		WorkspaceID:  "ws-1",
-		OpencodePort: 4096,
-	})
-	port = reg.NextPort()
-	if port != 4097 {
-		t.Errorf("NextPort = %d, want 4097", port)
-	}
-
-	// Adding a higher port — next port fills the gap.
-	reg.Put(&RegistryEntry{
-		Dir:          "/home/user/project2",
-		WorkspaceID:  "ws-1",
-		OpencodePort: 4098,
-	})
-	port = reg.NextPort()
-	if port != 4097 {
-		t.Errorf("NextPort = %d, want 4097 (gap fill)", port)
-	}
-
-	// Fill the gap — next port is after the contiguous block.
-	reg.Put(&RegistryEntry{
-		Dir:          "/home/user/project3",
-		WorkspaceID:  "ws-1",
-		OpencodePort: 4097,
-	})
-	port = reg.NextPort()
-	if port != 4099 {
-		t.Errorf("NextPort = %d, want 4099", port)
-	}
-
-	// Removing an entry frees its port for reuse.
-	reg.Remove("/home/user/project", "ws-1") // frees 4096
-	port = reg.NextPort()
-	if port != 4096 {
-		t.Errorf("NextPort after remove = %d, want 4096 (reuse)", port)
-	}
-}

@@ -1,15 +1,11 @@
 package agent
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net"
-	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -18,37 +14,24 @@ import (
 	"nhooyr.io/websocket"
 )
 
-// Client is the cli-agent tunnel client that connects to the server
-// and forwards HTTP/terminal requests to a local service.
+// Client is the agent tunnel client that connects to the server
+// and maintains a persistent connection for heartbeat and control.
 type Client struct {
-	ServerURL     string
-	SandboxID     string
-	TunnelToken   string
-	OpencodeURL   string // local HTTP service URL (e.g. http://localhost:4096)
-	OpencodeToken string // optional Basic Auth password for opencode
-	Workdir       string
-	BackendType   string // "opencode" or "claudecode"
-	httpClient    *http.Client
-
-	// OnTerminalStream is called when the server opens a terminal stream.
-	// Implementations should bridge the stream to a PTY.
-	// If nil, terminal streams are rejected.
-	OnTerminalStream func(stream net.Conn)
+	ServerURL   string
+	SandboxID   string
+	TunnelToken string
+	Workdir     string
+	BackendType string // "claudecode"
 }
 
 // NewClient creates a new agent tunnel client.
-func NewClient(serverURL, sandboxID, tunnelToken, opencodeURL, opencodeToken, workdir string) *Client {
+func NewClient(serverURL, sandboxID, tunnelToken, workdir string) *Client {
 	return &Client{
-		ServerURL:     serverURL,
-		SandboxID:     sandboxID,
-		TunnelToken:   tunnelToken,
-		OpencodeURL:   opencodeURL,
-		OpencodeToken: opencodeToken,
-		Workdir:       workdir,
-		BackendType:   "opencode",
-		httpClient: &http.Client{
-			Timeout: 0, // No timeout for SSE streams.
-		},
+		ServerURL:   serverURL,
+		SandboxID:   sandboxID,
+		TunnelToken: tunnelToken,
+		Workdir:     workdir,
+		BackendType: "claudecode",
 	}
 }
 
@@ -124,15 +107,15 @@ func (c *Client) connectAndServe(ctx context.Context) error {
 			}
 			return fmt.Errorf("accept stream: %w", err)
 		}
-		go c.handleServerStream(ctx, stream)
+		go c.handleServerStream(stream)
 	}
 }
 
 // handleServerStream dispatches a server-opened stream by its type.
-func (c *Client) handleServerStream(ctx context.Context, stream net.Conn) {
+func (c *Client) handleServerStream(stream net.Conn) {
 	defer stream.Close()
 
-	streamType, metadata, err := tunnel.ReadStreamHeader(stream)
+	streamType, _, err := tunnel.ReadStreamHeader(stream)
 	if err != nil {
 		log.Printf("read stream header: %v", err)
 		return
@@ -140,116 +123,12 @@ func (c *Client) handleServerStream(ctx context.Context, stream net.Conn) {
 
 	switch streamType {
 	case tunnel.StreamTypeHTTP:
-		c.handleHTTPStream(ctx, stream, metadata)
+		log.Printf("received HTTP proxy stream but agent is headless; closing")
 	case tunnel.StreamTypeTerminal:
-		c.handleTerminalStream(stream)
+		log.Printf("received terminal stream but agent is headless; closing")
 	default:
 		log.Printf("unknown server stream type: %d", streamType)
 	}
-}
-
-// handleHTTPStream proxies an HTTP request to the local service.
-func (c *Client) handleHTTPStream(ctx context.Context, stream net.Conn, metadata []byte) {
-	var meta tunnel.HTTPStreamMeta
-	if err := tunnel.UnmarshalStreamMeta(metadata, &meta); err != nil {
-		log.Printf("unmarshal HTTP metadata: %v", err)
-		c.writeHTTPError(stream, http.StatusBadRequest, "invalid metadata")
-		return
-	}
-
-	// Read exactly BodyLen bytes of request body.
-	var reqBody []byte
-	if meta.BodyLen > 0 {
-		reqBody = make([]byte, meta.BodyLen)
-		if _, err := io.ReadFull(stream, reqBody); err != nil {
-			log.Printf("read request body: %v", err)
-			c.writeHTTPError(stream, http.StatusBadGateway, "failed to read request body")
-			return
-		}
-	}
-
-	// Build the local HTTP request.
-	base, err := url.Parse(c.OpencodeURL)
-	if err != nil {
-		c.writeHTTPError(stream, http.StatusBadGateway, "invalid local URL")
-		return
-	}
-
-	path := meta.Path
-	if !strings.HasPrefix(path, "/") {
-		path = "/" + path
-	}
-	parsed, err := url.Parse(path)
-	if err != nil || parsed.Host != "" || parsed.Scheme != "" {
-		c.writeHTTPError(stream, http.StatusBadRequest, "invalid request path")
-		return
-	}
-	target := base.ResolveReference(parsed)
-
-	var bodyReader io.Reader
-	if len(reqBody) > 0 {
-		bodyReader = bytes.NewReader(reqBody)
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, meta.Method, target.String(), bodyReader)
-	if err != nil {
-		c.writeHTTPError(stream, http.StatusBadGateway, "failed to create request")
-		return
-	}
-
-	for k, v := range meta.Headers {
-		httpReq.Header.Set(k, v)
-	}
-	if c.OpencodeToken != "" {
-		httpReq.SetBasicAuth("opencode", c.OpencodeToken)
-	}
-
-	resp, err := c.httpClient.Do(httpReq)
-	if err != nil {
-		c.writeHTTPError(stream, http.StatusBadGateway, "local service error: "+err.Error())
-		return
-	}
-	defer resp.Body.Close()
-
-	// Write response header.
-	headers := make(map[string]string)
-	for k, vals := range resp.Header {
-		if len(vals) > 0 {
-			headers[k] = vals[0]
-		}
-	}
-	respMeta := tunnel.HTTPResponseMeta{
-		Status:  resp.StatusCode,
-		Headers: headers,
-	}
-	respMetaJSON, _ := tunnel.MarshalStreamMeta(respMeta)
-	if err := tunnel.WriteStreamHeader(stream, tunnel.StreamTypeHTTP, respMetaJSON); err != nil {
-		return
-	}
-
-	// Stream response body.
-	io.Copy(stream, resp.Body)
-}
-
-// writeHTTPError writes an error response on an HTTP stream.
-func (c *Client) writeHTTPError(stream net.Conn, status int, message string) {
-	respMeta := tunnel.HTTPResponseMeta{
-		Status:  status,
-		Headers: map[string]string{"Content-Type": "text/plain"},
-	}
-	respMetaJSON, _ := tunnel.MarshalStreamMeta(respMeta)
-	tunnel.WriteStreamHeader(stream, tunnel.StreamTypeHTTP, respMetaJSON)
-	stream.Write([]byte(message))
-}
-
-// handleTerminalStream delegates to the OnTerminalStream callback.
-func (c *Client) handleTerminalStream(stream net.Conn) {
-	if c.OnTerminalStream == nil {
-		log.Printf("terminal stream received but no handler configured")
-		return
-	}
-	// Don't defer stream.Close() here — the callback owns the stream lifecycle.
-	c.OnTerminalStream(stream)
 }
 
 // sendAgentInfoLoop periodically sends agent info via control streams.
@@ -276,7 +155,7 @@ func (c *Client) sendAgentInfo(session *yamux.Session) {
 	}
 	defer stream.Close()
 
-	info := collectAgentInfo(c.OpencodeURL, c.Workdir)
+	info := collectAgentInfo("", c.Workdir)
 	data, err := json.Marshal(info)
 	if err != nil {
 		return
