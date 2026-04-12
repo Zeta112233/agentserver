@@ -38,7 +38,7 @@ func NewTaskWorker(opts TaskWorkerOptions) *TaskWorker {
 }
 
 // ExecuteTask runs a single task: connects bridge, executes via Agent SDK.
-func (w *TaskWorker) ExecuteTask(ctx context.Context, taskID, sessionID, prompt, systemContext string, maxTurns int, maxBudgetUSD float64) error {
+func (w *TaskWorker) ExecuteTask(ctx context.Context, taskID, sessionID, prompt, systemContext string, maxTurns int, maxBudgetUSD float64) (*agentsdk.ResultMessage, error) {
 	log.Printf("task-worker: executing task %s (session=%s)", taskID, sessionID)
 
 	// Create session only if not provided by the server.
@@ -52,7 +52,7 @@ func (w *TaskWorker) ExecuteTask(ctx context.Context, taskID, sessionID, prompt,
 			TimeoutMs:  10000,
 		})
 		if err != nil {
-			return fmt.Errorf("create session: %w", err)
+			return nil, fmt.Errorf("create session: %w", err)
 		}
 		log.Printf("task-worker: created session %s", sessionID)
 	}
@@ -66,7 +66,7 @@ func (w *TaskWorker) ExecuteTask(ctx context.Context, taskID, sessionID, prompt,
 		TimeoutMs:  10000,
 	})
 	if err != nil {
-		return fmt.Errorf("fetch credentials: %w", err)
+		return nil, fmt.Errorf("fetch credentials: %w", err)
 	}
 	log.Printf("task-worker: got bridge credentials (epoch=%d)", creds.WorkerEpoch)
 
@@ -79,7 +79,7 @@ func (w *TaskWorker) ExecuteTask(ctx context.Context, taskID, sessionID, prompt,
 		OutboundOnly: false,
 	})
 	if err != nil {
-		return fmt.Errorf("attach bridge: %w", err)
+		return nil, fmt.Errorf("attach bridge: %w", err)
 	}
 	defer bridge.Close()
 
@@ -126,18 +126,19 @@ func (w *TaskWorker) ExecuteTask(ctx context.Context, taskID, sessionID, prompt,
 
 	if err := stream.Err(); err != nil {
 		bridge.ReportState(agentsdk.SessionStateIdle)
-		return fmt.Errorf("query execution: %w", err)
+		return nil, fmt.Errorf("query execution: %w", err)
 	}
 
-	// 7. Send final result — also use Raw.
+	var resultMsg *agentsdk.ResultMessage
 	if result, err := stream.Result(); err == nil && result != nil {
+		resultMsg = result
 		resultData, _ := json.Marshal(result)
 		bridge.WriteBatch([]json.RawMessage{resultData})
 	}
 
 	bridge.ReportState(agentsdk.SessionStateIdle)
 	log.Printf("task-worker: task %s completed", taskID)
-	return nil
+	return resultMsg, nil
 }
 
 // RunTaskWorker starts the task worker that polls for tasks. Blocks until ctx is cancelled.
@@ -161,11 +162,12 @@ func RunTaskWorker(ctx context.Context, opts TaskWorkerOptions) {
 				if ctx.Err() != nil {
 					return
 				}
-				if err := worker.ExecuteTask(ctx, task.ID, task.SessionID, task.Prompt, task.SystemContext, task.MaxTurns, task.MaxBudgetUSD); err != nil {
+				resultMsg, err := worker.ExecuteTask(ctx, task.ID, task.SessionID, task.Prompt, task.SystemContext, task.MaxTurns, task.MaxBudgetUSD)
+				if err != nil {
 					log.Printf("task-worker: task %s failed: %v", task.ID, err)
 					worker.reportTaskFailure(ctx, task.ID, err.Error())
 				} else {
-					worker.reportTaskComplete(ctx, task.ID)
+					worker.reportTaskComplete(ctx, task.ID, resultMsg)
 				}
 			}
 		}
@@ -246,9 +248,15 @@ func (w *TaskWorker) reportTaskFailure(ctx context.Context, taskID, reason strin
 	w.updateTaskStatus(ctx, taskID, body)
 }
 
-func (w *TaskWorker) reportTaskComplete(ctx context.Context, taskID string) {
+func (w *TaskWorker) reportTaskComplete(ctx context.Context, taskID string, result *agentsdk.ResultMessage) {
 	log.Printf("task-worker: task %s completed", taskID)
-	body, _ := json.Marshal(map[string]string{"status": "completed"})
+	payload := map[string]any{"status": "completed"}
+	if result != nil {
+		payload["result"] = result.Result
+		payload["total_cost_usd"] = result.TotalCostUSD
+		payload["num_turns"] = result.NumTurns
+	}
+	body, _ := json.Marshal(payload)
 	w.updateTaskStatus(ctx, taskID, body)
 }
 
