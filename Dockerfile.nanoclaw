@@ -1,4 +1,4 @@
-ARG NANOCLAW_VERSION=v1.2.42
+ARG NANOCLAW_VERSION=v1.2.52
 
 # Stage 0: Build agentserver Go binary (for mcp-server subcommand)
 FROM golang:1.26-alpine AS go-builder
