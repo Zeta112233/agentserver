@@ -7,19 +7,18 @@ COPY . .
 RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /agentserver ./cmd/agentserver-agent
 
 # Stage 2: Claude Code cloud sandbox
-FROM node:20-slim
+FROM debian:bookworm-slim
 
-# System dependencies (git, ca-certificates) + ttyd from GitHub releases
-# (ttyd is not in Debian bookworm default repos)
+# System dependencies, ttyd, and Claude Code native installer
 RUN apt-get update && \
     apt-get install -y --no-install-recommends git ca-certificates curl && \
     curl -fsSL https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.x86_64 -o /usr/local/bin/ttyd && \
     chmod +x /usr/local/bin/ttyd && \
+    curl -fsSL https://claude.ai/install.sh | sh && \
+    cp /root/.claude/bin/claude /usr/local/bin/claude && \
+    rm -rf /root/.claude && \
     apt-get purge -y curl && apt-get autoremove -y && \
     rm -rf /var/lib/apt/lists/*
-
-# Claude Code CLI
-RUN npm install -g @anthropic-ai/claude-code
 
 # agentserver binary (mcp-server subcommand for agent discovery + delegation)
 COPY --from=go-builder /agentserver /usr/local/bin/agentserver
@@ -29,9 +28,8 @@ COPY claudecode-entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 # Agent user (UID 1000, matches K8s init container expectations).
-# node:20-slim already has a 'node' user at UID 1000 — reuse it with a login shell.
-RUN usermod -l agent -d /home/agent -m -s /bin/bash node 2>/dev/null || true && \
-    mkdir -p /home/agent && chown 1000:1000 /home/agent
+RUN groupadd -g 1000 agent && \
+    useradd -u 1000 -g agent -m -d /home/agent -s /bin/bash agent
 USER 1000
 WORKDIR /home/agent
 
