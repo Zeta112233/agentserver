@@ -1,4 +1,4 @@
-.PHONY: dev build clean frontend backend agent agent-all llmproxy docker docker-agent docker-llmproxy docker-openclaw docker-all
+.PHONY: dev build clean frontend backend agent agent-all llmproxy credentialproxy test docker docker-agent docker-llmproxy docker-credentialproxy docker-openclaw docker-all
 
 # Development: run frontend dev server + Go backend
 dev:
@@ -20,6 +20,13 @@ agent:
 llmproxy:
 	CGO_ENABLED=0 go build -o bin/llmproxy ./cmd/llmproxy
 
+credentialproxy:
+	CGO_ENABLED=0 go build -o bin/credentialproxy ./cmd/credentialproxy
+
+test:
+	go vet ./...
+	go test ./... -count=1
+
 agent-all:
 	GOOS=linux   GOARCH=amd64 CGO_ENABLED=0 go build -o bin/agentserver-linux-amd64        ./cmd/agentserver-agent
 	GOOS=linux   GOARCH=arm64 CGO_ENABLED=0 go build -o bin/agentserver-linux-arm64        ./cmd/agentserver-agent
@@ -39,7 +46,10 @@ docker-agent:
 docker-llmproxy:
 	docker build -f Dockerfile.llmproxy -t llmproxy:latest .
 
+docker-credentialproxy:
+	docker build -f Dockerfile.credentialproxy -t credentialproxy:latest .
+
 docker-openclaw:
 	docker build -f Dockerfile.openclaw -t openclaw-agent:latest .
 
-docker-all: docker docker-agent docker-llmproxy
+docker-all: docker docker-agent docker-llmproxy docker-credentialproxy

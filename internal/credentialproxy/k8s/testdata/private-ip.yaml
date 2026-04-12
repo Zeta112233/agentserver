@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Config
+current-context: private-cluster
+clusters:
+  - name: private-cluster
+    cluster:
+      server: https://10.0.0.1:6443
+users:
+  - name: private-user
+    user:
+      token: some-token
+contexts:
+  - name: private-cluster
+    context:
+      cluster: private-cluster
+      user: private-user

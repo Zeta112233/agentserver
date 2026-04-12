@@ -34,6 +34,8 @@ services:
       ANTHROPIC_BASE_URL: "${ANTHROPIC_BASE_URL:-}"
       AGENT_IMAGE: "${AGENT_IMAGE:-agentserver-agent:latest}"
       OPENCODE_CONFIG_CONTENT: '{"provider":{"anthropic":{"options":{"baseURL":"http://llmproxy:8081/v1"}}}}'
+      CREDPROXY_ENCRYPTION_KEY: "${CREDPROXY_ENCRYPTION_KEY:-}"
+      CREDPROXY_PUBLIC_URL: "http://credentialproxy:8083"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
@@ -54,6 +56,22 @@ services:
     depends_on:
       - postgres
       - postgres-init-llmproxy
+      - server
+
+  credentialproxy:
+    build:
+      context: .
+      dockerfile: Dockerfile.credentialproxy
+    ports:
+      - "8083:8083"
+    environment:
+      CREDPROXY_PORT: "8083"
+      CREDPROXY_DATABASE_URL: "postgres://agentserver:agentserver@postgres:5432/agentserver?sslmode=disable"
+      CREDPROXY_AGENTSERVER_URL: "http://server:8080"
+      CREDPROXY_ENCRYPTION_KEY: "${CREDPROXY_ENCRYPTION_KEY}"
+      CREDPROXY_LOG_LEVEL: "info"
+    depends_on:
+      - postgres
       - server
 
 volumes:

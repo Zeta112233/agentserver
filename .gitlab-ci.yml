@@ -1,10 +1,22 @@
 stages:
+  - test
   - build
   - deploy
 
 variables:
   IMAGE: registry.nj.cs.ac.cn/mryao/agentserver
   AGENT_IMAGE: registry.nj.cs.ac.cn/mryao/agentserver-agent
+  CREDPROXY_IMAGE: registry.nj.cs.ac.cn/mryao/credentialproxy
+
+test:
+  stage: test
+  image: golang:1.26-trixie
+  script:
+    - go vet ./...
+    - go test ./... -count=1 -timeout 5m
+  rules:
+    - if: $CI_COMMIT_BRANCH == "master"
+    - if: $CI_MERGE_REQUEST_ID
 
 build-server:
   stage: build
@@ -27,6 +39,18 @@ build-agent:
     - docker build -f Dockerfile.agent -t $AGENT_IMAGE:$CI_COMMIT_SHORT_SHA -t $AGENT_IMAGE:latest .
     - docker push $AGENT_IMAGE:$CI_COMMIT_SHORT_SHA
     - docker push $AGENT_IMAGE:latest
+  rules:
+    - if: $CI_COMMIT_BRANCH == "master"
+
+build-credentialproxy:
+  stage: build
+  image: docker:27
+  services:
+    - docker:27-dind
+  script:
+    - docker build -f Dockerfile.credentialproxy -t $CREDPROXY_IMAGE:$CI_COMMIT_SHORT_SHA -t $CREDPROXY_IMAGE:latest .
+    - docker push $CREDPROXY_IMAGE:$CI_COMMIT_SHORT_SHA
+    - docker push $CREDPROXY_IMAGE:latest
   rules:
     - if: $CI_COMMIT_BRANCH == "master"
 

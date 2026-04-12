@@ -31,6 +31,7 @@ type Config struct {
 	ClaudeCodeRuntimeClassName string
 	ClaudeCodePort             int    // default 7681 (ttyd)
 	AgentServerInternalURL     string // agentserver API URL for sandbox MCP bridge (e.g. "http://agentserver.agentserver.svc:8080")
+	CredproxyPublicURL         string // URL sandboxes use to reach credentialproxy (e.g. "http://credentialproxy.agentserver.svc:8083")
 }
 
 // DefaultConfig returns a Config populated from environment variables with sensible defaults.
@@ -57,6 +58,7 @@ func DefaultConfig() Config {
 		ClaudeCodeRuntimeClassName: os.Getenv("CLAUDECODE_RUNTIME_CLASS"),
 		ClaudeCodePort:             7681,
 		AgentServerInternalURL:     os.Getenv("AGENTSERVER_INTERNAL_URL"),
+		CredproxyPublicURL:         os.Getenv("CREDPROXY_PUBLIC_URL"),
 	}
 }
 

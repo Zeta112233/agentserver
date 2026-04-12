@@ -21,6 +21,8 @@ import (
 	"encoding/hex"
 
 	"github.com/agentserver/agentserver/internal/auth"
+	"github.com/agentserver/agentserver/internal/crypto"
+	_ "github.com/agentserver/agentserver/internal/credentialproxy/k8s" // register k8s credential provider
 	"github.com/agentserver/agentserver/internal/bridge"
 	"github.com/agentserver/agentserver/internal/container"
 	"github.com/agentserver/agentserver/internal/db"
@@ -242,6 +244,17 @@ var serveCmd = &cobra.Command{
 			log.Println("Warning: BRIDGE_JWT_SECRET not set, using auto-generated secret (bridge sessions won't survive restart)")
 		}
 		srv.BridgeHandler = bridge.NewHandler(database, []byte(bridgeJWTSecret))
+
+		// Credential proxy integration.
+		if encKeyEnv := os.Getenv("CREDPROXY_ENCRYPTION_KEY"); encKeyEnv != "" {
+			encKey, err := crypto.LoadKeyFromEnv("CREDPROXY_ENCRYPTION_KEY")
+			if err != nil {
+				log.Fatalf("Failed to load CREDPROXY_ENCRYPTION_KEY: %v", err)
+			}
+			srv.EncryptionKey = encKey
+			srv.CredproxyPublicURL = os.Getenv("CREDPROXY_PUBLIC_URL")
+			log.Printf("Credential proxy enabled (credproxy URL: %s)", srv.CredproxyPublicURL)
+		}
 
 		addr := fmt.Sprintf(":%d", port)
 

@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Config
+current-context: bad-cluster
+clusters:
+  - name: bad-cluster
+    cluster:
+      server: http://api.example.com:6443
+users:
+  - name: bad-user
+    user:
+      token: some-token
+contexts:
+  - name: bad-cluster
+    context:
+      cluster: bad-cluster
+      user: bad-user

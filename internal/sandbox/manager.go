@@ -28,6 +28,9 @@ import (
 
 	sandboxv1alpha1 "sigs.k8s.io/agent-sandbox/api/v1alpha1"
 
+	"encoding/json"
+
+	credprovider "github.com/agentserver/agentserver/internal/credentialproxy/provider"
 	"github.com/agentserver/agentserver/internal/db"
 	"github.com/agentserver/agentserver/internal/process"
 )
@@ -572,6 +575,39 @@ chown -R 1000:1000 /mnt/session-data
 		workingDir = "/app"
 	}
 
+	// Inject credential proxy config files (kubeconfig, etc.) if bindings exist.
+	credFiles, credEnv, credErr := m.buildCredentialConfig(ctx, opts.WorkspaceID, opts.ProxyToken)
+	if credErr != nil {
+		log.Printf("warning: credential config: %v", credErr)
+	}
+	var credSecretName string
+	if len(credFiles) > 0 {
+		credSecretName = sandboxName + "-creds"
+		if err := m.createCredentialSecret(ctx, ns, credSecretName, sandboxName, credFiles); err != nil {
+			log.Printf("warning: create credential secret: %v", err)
+			credSecretName = ""
+		} else {
+			defaultMode := int32(0o600)
+			volumes = append(volumes, corev1.Volume{
+				Name: "cred-config",
+				VolumeSource: corev1.VolumeSource{
+					Secret: &corev1.SecretVolumeSource{
+						SecretName:  credSecretName,
+						DefaultMode: &defaultMode,
+					},
+				},
+			})
+			volumeMounts = append(volumeMounts, corev1.VolumeMount{
+				Name:      "cred-config",
+				MountPath: "/var/run/agentserver",
+				ReadOnly:  true,
+			})
+			for k, v := range credEnv {
+				containerEnv = append(containerEnv, corev1.EnvVar{Name: k, Value: v})
+			}
+		}
+	}
+
 	mainContainer := corev1.Container{
 		Name:            sandboxContainerName,
 		Image:           sandboxImage,
@@ -952,6 +988,10 @@ func (m *Manager) Stop(id string) error {
 	if err := m.k8s.Delete(ctx, sb); err != nil {
 		log.Printf("failed to delete sandbox %s: %v", sandboxName, err)
 	}
+
+	// Clean up credential Secret (if any).
+	m.deleteCredentialSecret(ctx, ns, sandboxName)
+
 	return nil
 }
 
@@ -1031,4 +1071,88 @@ func (m *Manager) Close() error {
 		m.Stop(id)
 	}
 	return nil
+}
+
+// buildCredentialConfig iterates registered credential providers and builds
+// config files + env vars to inject into a sandbox pod.
+func (m *Manager) buildCredentialConfig(ctx context.Context, workspaceID, proxyToken string) (map[string][]byte, map[string]string, error) {
+	if m.cfg.CredproxyPublicURL == "" || m.db == nil {
+		return nil, nil, nil
+	}
+
+	files := make(map[string][]byte)
+	envVars := make(map[string]string)
+
+	for _, prov := range credprovider.All() {
+		metas, err := m.db.ListCredentialBindingsMeta(workspaceID, prov.Kind())
+		if err != nil {
+			return nil, nil, fmt.Errorf("list bindings for %s: %w", prov.Kind(), err)
+		}
+		if len(metas) == 0 {
+			continue
+		}
+
+		// Convert DB metas to provider BindingMetas.
+		bindings := make([]*credprovider.BindingMeta, len(metas))
+		for i, meta := range metas {
+			var pm map[string]any
+			if len(meta.PublicMeta) > 0 {
+				json.Unmarshal(meta.PublicMeta, &pm)
+			}
+			bindings[i] = &credprovider.BindingMeta{
+				ID:          meta.ID,
+				WorkspaceID: meta.WorkspaceID,
+				Kind:        meta.Kind,
+				DisplayName: meta.DisplayName,
+				ServerURL:   meta.ServerURL,
+				PublicMeta:  pm,
+				AuthType:    meta.AuthType,
+				IsDefault:   meta.IsDefault,
+			}
+		}
+
+		cfgFiles, err := prov.BuildSandboxConfig(bindings, proxyToken, m.cfg.CredproxyPublicURL)
+		if err != nil {
+			return nil, nil, fmt.Errorf("build config for %s: %w", prov.Kind(), err)
+		}
+		for _, f := range cfgFiles {
+			files[f.SubPath] = f.Content
+			for k, v := range f.EnvVars {
+				envVars[k] = v
+			}
+		}
+	}
+
+	return files, envVars, nil
+}
+
+// createCredentialSecret creates a K8s Secret with the given data in the namespace.
+// The sandbox-name label enables cleanup when the sandbox is deleted.
+func (m *Manager) createCredentialSecret(ctx context.Context, namespace, name, sandboxName string, data map[string][]byte) error {
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+			Labels: map[string]string{
+				labelManagedBy:   labelValue,
+				"sandbox-name":   sandboxName,
+			},
+		},
+		Data: data,
+	}
+	_, err := m.clientset.CoreV1().Secrets(namespace).Create(ctx, secret, metav1.CreateOptions{})
+	if err != nil {
+		return fmt.Errorf("create secret %s/%s: %w", namespace, name, err)
+	}
+	return nil
+}
+
+// deleteCredentialSecret deletes the credential secret for a sandbox if it exists.
+func (m *Manager) deleteCredentialSecret(ctx context.Context, namespace, sandboxName string) {
+	secretName := sandboxName + "-creds"
+	err := m.clientset.CoreV1().Secrets(namespace).Delete(ctx, secretName, metav1.DeleteOptions{})
+	if err != nil {
+		// Not found is fine — the secret may not have been created.
+		log.Printf("delete credential secret %s/%s: %v", namespace, secretName, err)
+	}
 }

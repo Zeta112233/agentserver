@@ -68,6 +68,10 @@ type Server struct {
 
 	// BridgeHandler provides CCR V2-compatible bridge API for agent sessions.
 	BridgeHandler *bridge.Handler
+
+	// Credential proxy
+	EncryptionKey    []byte // AES-256 key for credential_bindings auth_blob
+	CredproxyPublicURL string // URL sandboxes use to reach credentialproxy
 }
 
 func New(a *auth.Auth, oidcMgr *auth.OIDCManager, database *db.DB, sandboxStore *sbxstore.Store, processManager process.Manager, driveManager storage.DriveManager, nsMgr *namespace.Manager, tunnelReg *tunnel.Registry, staticFS fs.FS, passwordAuthEnabled bool) *Server {
@@ -285,6 +289,13 @@ func (s *Server) Router() http.Handler {
 		r.Get("/api/sandboxes/{id}/traces/{traceId}", s.handleTraceDetail)
 		r.Get("/api/workspaces/{wid}/traces", s.handleWorkspaceTraces)
 		r.Get("/api/workspaces/{wid}/traces/{traceId}", s.handleWorkspaceTraceDetail)
+
+		// Credential binding routes
+		r.Get("/api/workspaces/{id}/credentials/{kind}", s.handleListCredentialBindings)
+		r.Post("/api/workspaces/{id}/credentials/{kind}", s.handleCreateCredentialBinding)
+		r.Patch("/api/workspaces/{id}/credentials/{kind}/{bindingId}", s.handlePatchCredentialBinding)
+		r.Delete("/api/workspaces/{id}/credentials/{kind}/{bindingId}", s.handleDeleteCredentialBinding)
+		r.Post("/api/workspaces/{id}/credentials/{kind}/{bindingId}/set-default", s.handleSetDefaultCredentialBinding)
 
 		// IM routes: proxy to standalone imbridge service.
 		if s.IMBridgeURL != "" {
