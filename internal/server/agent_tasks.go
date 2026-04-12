@@ -202,6 +202,13 @@ func (s *Server) handleGetTask(w http.ResponseWriter, r *http.Request) {
 		resp["completed_at"] = task.CompletedAt.Time.Format(time.RFC3339)
 	}
 
+	if r.URL.Query().Get("include_output") == "true" && task.SessionID.Valid {
+		events, err := s.DB.GetAgentSessionEventsSince(task.SessionID.String, 0, 500)
+		if err == nil && len(events) > 0 {
+			resp["output"] = extractTaskOutput(events)
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 }
