@@ -22,8 +22,8 @@ type runtimeEntry struct {
 }
 
 type gpuEntry struct {
-	Name   string `json:"name"`
-	Memory string `json:"memory,omitempty"`
+	Name     string `json:"name"`
+	MemoryMB int    `json:"memory_mb,omitempty"`
 }
 
 func buildCardJSON(caps *capabilitiesPayload, info *db.AgentInfo) json.RawMessage {
@@ -51,6 +51,9 @@ func buildHardwareSummary(info *db.AgentInfo, gpu *gpuEntry) map[string]any {
 	if gpu != nil {
 		hw["has_gpu"] = true
 		hw["gpu_info"] = gpu.Name
+		if gpu.MemoryMB > 0 {
+			hw["gpu_memory_gb"] = gpu.MemoryMB / 1024
+		}
 	}
 	return hw
 }

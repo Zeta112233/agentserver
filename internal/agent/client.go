@@ -22,7 +22,8 @@ type Client struct {
 	SandboxID   string
 	TunnelToken string
 	Workdir     string
-	BackendType        string // "claudecode"
+	BackendType string // "claudecode"
+
 	cachedCapabilities *AgentCapabilities
 	capabilitiesMu     sync.Mutex
 	lastProbeTime      time.Time
@@ -138,7 +139,7 @@ func (c *Client) handleServerStream(stream net.Conn) {
 // sendAgentInfoLoop periodically sends agent info via control streams.
 func (c *Client) sendAgentInfoLoop(ctx context.Context, session *yamux.Session) {
 	// Send initial info immediately.
-	c.sendAgentInfo(session)
+	c.sendAgentInfo(ctx, session)
 
 	ticker := time.NewTicker(20 * time.Second)
 	defer ticker.Stop()
@@ -147,12 +148,12 @@ func (c *Client) sendAgentInfoLoop(ctx context.Context, session *yamux.Session) 
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			c.sendAgentInfo(session)
+			c.sendAgentInfo(ctx, session)
 		}
 	}
 }
 
-func (c *Client) sendAgentInfo(session *yamux.Session) {
+func (c *Client) sendAgentInfo(ctx context.Context, session *yamux.Session) {
 	stream, err := session.Open()
 	if err != nil {
 		return
@@ -167,7 +168,7 @@ func (c *Client) sendAgentInfo(session *yamux.Session) {
 	c.capabilitiesMu.Unlock()
 
 	if needsProbe {
-		caps := ProbeCapabilities(context.Background())
+		caps := ProbeCapabilities(ctx)
 		c.capabilitiesMu.Lock()
 		c.cachedCapabilities = caps
 		c.lastProbeTime = time.Now()

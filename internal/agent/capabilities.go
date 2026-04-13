@@ -4,6 +4,7 @@ import (
 	"context"
 	"os/exec"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -51,7 +52,7 @@ var javaVersionRe = regexp.MustCompile(`"(\d+\.\d+(?:\.\d+)?)"`)
 var probes = []probe{
 	// Languages
 	{name: "go", binary: "go", args: []string{"version"}, parser: parseGoVersion, category: "language"},
-	{name: "python", binary: "python3", args: []string{"--version"}, parser: parsePythonVersion, category: "language"},
+	{name: "python3", binary: "python3", args: []string{"--version"}, parser: parsePythonVersion, category: "language"},
 	{name: "node", binary: "node", args: []string{"--version"}, parser: parseNodeVersion, category: "language"},
 	{name: "rust", binary: "rustc", args: []string{"--version"}, parser: parseRustVersion, category: "language"},
 	{name: "java", binary: "java", args: []string{"-version"}, parser: parseJavaVersion, category: "language"},
@@ -113,6 +114,25 @@ func ProbeCapabilities(ctx context.Context) *AgentCapabilities {
 	}()
 
 	wg.Wait()
+
+	// Fallback: if python3 wasn't found, try python.
+	hasPython := false
+	for _, lang := range caps.Languages {
+		if lang.Name == "python3" {
+			hasPython = true
+			break
+		}
+	}
+	if !hasPython {
+		if ri := runProbe(ctx, probe{name: "python3", binary: "python", args: []string{"--version"}, parser: parsePythonVersion, category: "language"}); ri != nil {
+			caps.Languages = append(caps.Languages, *ri)
+		}
+	}
+
+	// Sort for deterministic output (probes run concurrently).
+	sort.Slice(caps.Languages, func(i, j int) bool { return caps.Languages[i].Name < caps.Languages[j].Name })
+	sort.Slice(caps.Tools, func(i, j int) bool { return caps.Tools[i].Name < caps.Tools[j].Name })
+
 	return caps
 }
 
