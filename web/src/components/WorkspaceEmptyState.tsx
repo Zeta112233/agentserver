@@ -29,7 +29,7 @@ export function WorkspaceEmptyState({ workspaceId }: WorkspaceEmptyStateProps) {
   const goToSettings = () => navigate('/workspaces?tab=settings')
 
   const providerLabel = (p: string) =>
-    p === 'telegram' ? 'Telegram' : p === 'matrix' ? 'Matrix' : 'WeChat'
+    p === 'telegram' ? 'Telegram' : p === 'matrix' ? 'Matrix' : p === 'weixin' ? 'WeChat' : p
 
   const imStatusText = () => {
     if (imChannels.length === 0) return 'No channels configured'
