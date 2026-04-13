@@ -151,11 +151,12 @@ type AgentInfoData struct {
 
 **Modified file:** `internal/agent/client.go`
 
-Add a cached capabilities field to `Client`:
+Add cached capabilities fields to `Client`. The current `Client` struct is minimal
+(ServerURL, SandboxID, TunnelToken, Workdir, BackendType) after the headless refactor:
 
 ```go
 type Client struct {
-    // ... existing fields ...
+    // ... existing 5 fields ...
     cachedCapabilities *AgentCapabilities
     capabilitiesMu     sync.Mutex
     lastProbeTime      time.Time
@@ -167,7 +168,7 @@ Update `sendAgentInfo()` to include capabilities:
 ```go
 func (c *Client) sendAgentInfo(session *yamux.Session) {
     // ... existing code ...
-    info := collectAgentInfo(c.OpencodeURL, c.Workdir)
+    info := collectAgentInfo("", c.Workdir)
 
     // Attach capabilities (probe if needed).
     // Probe OUTSIDE the lock to avoid blocking heartbeats for 2-3 seconds.
@@ -200,13 +201,15 @@ func (c *Client) sendAgentInfo(session *yamux.Session) {
 
 **Modified file:** `internal/agent/task_worker.go`
 
-The existing `RegisterDefaultCard()` function hardcodes 4 skills and POSTs to `/api/agent/discovery/cards`. This is the root cause of all agents looking identical.
+The existing `RegisterDefaultCard()` function (in `task_worker.go`) hardcodes 4 skills and POSTs to `/api/agent/discovery/cards`. This is the root cause of all agents looking identical. It is called from `claudecode.go:140`.
 
 **Change:** Remove `RegisterDefaultCard()`. Card registration is now driven entirely by the heartbeat capability flow (Section 4 below). The server creates/updates the card when it receives the first heartbeat with capabilities.
 
 **Modified file:** `internal/agent/claudecode.go`
 
-Remove the `RegisterDefaultCard()` call at line 182. The agent card will be created by the server when the first heartbeat arrives with capabilities data (within ~3 seconds of connect).
+Remove the `RegisterDefaultCard()` call at line 140. The agent card will be created by the server when the first heartbeat arrives with capabilities data (within ~3 seconds of connect).
+
+Note: After the headless refactor (`5aca2a2`), `claudecode.go` is the only agent entry point — the `connect` command and opencode path have been removed. So this is the single place to change.
 
 Note: There is a brief window (~3s) between tunnel connect and the first heartbeat where no card exists. This is acceptable because:
 - The agent is already marked as "running" by the tunnel handler
@@ -466,7 +469,7 @@ Agent Machine                           Server
 | `internal/agent/sysinfo.go` | Add `Capabilities *AgentCapabilities` field to `AgentInfoData` |
 | `internal/agent/client.go` | Add capability caching to `Client`, integrate into `sendAgentInfo()` |
 | `internal/agent/task_worker.go` | Remove `RegisterDefaultCard()` function |
-| `internal/agent/claudecode.go` | Remove `RegisterDefaultCard()` call at line 182 |
+| `internal/agent/claudecode.go` | Remove `RegisterDefaultCard()` call at line 140 (only agent entry point after headless refactor) |
 | `internal/db/migrations/017_agent_capabilities.sql` | **New.** `ALTER TABLE agent_info ADD COLUMN capabilities JSONB` |
 | `internal/db/agent_info.go` | Add `Capabilities` field, update `UpsertAgentInfo`/`GetAgentInfo` |
 | `internal/db/agent_cards.go` | Add `UpsertAgentCardFromCapabilities()` method (upsert, not update) |
