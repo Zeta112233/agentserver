@@ -1,6 +1,6 @@
 import { useSearchParams } from 'react-router-dom'
 import { type Workspace } from '../lib/api'
-import { WorkspaceDetail } from './WorkspaceDetail'
+import { WorkspaceDetail, type Tab } from './WorkspaceDetail'
 import { FolderOpen } from 'lucide-react'
 
 interface ManageWorkspacesProps {
@@ -13,8 +13,8 @@ interface ManageWorkspacesProps {
 export function ManageWorkspaces({ workspaces, selectedWorkspaceId, onSelectWorkspace, onRenameWorkspace }: ManageWorkspacesProps) {
   const [searchParams] = useSearchParams()
   const tabParam = searchParams.get('tab')
-  const validTabs = ['overview', 'members', 'traces', 'settings']
-  const initialTab = (tabParam && validTabs.includes(tabParam)) ? tabParam as 'overview' | 'members' | 'traces' | 'settings' : undefined
+  const validTabs: Tab[] = ['overview', 'members', 'traces', 'settings']
+  const initialTab = (tabParam && validTabs.includes(tabParam)) ? tabParam as Tab : undefined
 
   const selectedWorkspace = workspaces.find((w) => w.id === selectedWorkspaceId)
 

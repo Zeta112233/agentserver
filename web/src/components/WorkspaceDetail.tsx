@@ -49,7 +49,7 @@ import { WeixinLoginModal } from './WeixinLoginModal'
 import { TelegramConfigModal } from './TelegramConfigModal'
 import { MatrixConfigModal } from './MatrixConfigModal'
 
-type Tab = 'overview' | 'members' | 'traces' | 'settings'
+export type Tab = 'overview' | 'members' | 'traces' | 'settings'
 
 interface WorkspaceDetailProps {
   workspace: Workspace
