@@ -1,0 +1,1 @@
+ALTER TABLE agent_info ADD COLUMN IF NOT EXISTS capabilities JSONB;

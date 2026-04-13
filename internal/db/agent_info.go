@@ -26,6 +26,7 @@ type AgentInfo struct {
 	CPUInfo         json.RawMessage `json:"cpu_info"`
 	MemoryInfo      json.RawMessage `json:"memory_info"`
 	DiskInfo        json.RawMessage `json:"disk_info"`
+	Capabilities    json.RawMessage `json:"capabilities"`
 	UpdatedAt       time.Time       `json:"updated_at"`
 }
 
@@ -36,8 +37,8 @@ func (db *DB) UpsertAgentInfo(info *AgentInfo) error {
 			sandbox_id, hostname, os, platform, platform_version, kernel_arch,
 			cpu_model_name, cpu_count_logical, memory_total, disk_total, disk_free,
 			agent_version, opencode_version, workdir, host_info, cpu_info, memory_info, disk_info,
-			updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,NOW())
+			capabilities, updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,NOW())
 		ON CONFLICT (sandbox_id) DO UPDATE SET
 			hostname = EXCLUDED.hostname,
 			os = EXCLUDED.os,
@@ -56,11 +57,13 @@ func (db *DB) UpsertAgentInfo(info *AgentInfo) error {
 			cpu_info = EXCLUDED.cpu_info,
 			memory_info = EXCLUDED.memory_info,
 			disk_info = EXCLUDED.disk_info,
+			capabilities = EXCLUDED.capabilities,
 			updated_at = NOW()
 	`,
 		info.SandboxID, info.Hostname, info.OS, info.Platform, info.PlatformVersion, info.KernelArch,
 		info.CPUModelName, info.CPUCountLogical, info.MemoryTotal, info.DiskTotal, info.DiskFree,
 		info.AgentVersion, info.OpencodeVersion, info.Workdir, info.HostInfo, info.CPUInfo, info.MemoryInfo, info.DiskInfo,
+		info.Capabilities,
 	)
 	return err
 }
@@ -72,13 +75,13 @@ func (db *DB) GetAgentInfo(sandboxID string) (*AgentInfo, error) {
 		SELECT sandbox_id, hostname, os, platform, platform_version, kernel_arch,
 			cpu_model_name, cpu_count_logical, memory_total, disk_total, disk_free,
 			agent_version, opencode_version, workdir, host_info, cpu_info, memory_info, disk_info,
-			updated_at
+			capabilities, updated_at
 		FROM agent_info WHERE sandbox_id = $1
 	`, sandboxID).Scan(
 		&info.SandboxID, &info.Hostname, &info.OS, &info.Platform, &info.PlatformVersion, &info.KernelArch,
 		&info.CPUModelName, &info.CPUCountLogical, &info.MemoryTotal, &info.DiskTotal, &info.DiskFree,
 		&info.AgentVersion, &info.OpencodeVersion, &info.Workdir, &info.HostInfo, &info.CPUInfo, &info.MemoryInfo, &info.DiskInfo,
-		&info.UpdatedAt,
+		&info.Capabilities, &info.UpdatedAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
