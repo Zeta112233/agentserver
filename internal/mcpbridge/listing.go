@@ -25,6 +25,15 @@ type DiscoveredAgent struct {
 			Name        string `json:"name"`
 			Description string `json:"description"`
 		} `json:"skills"`
+		Languages []struct {
+			Name    string `json:"name"`
+			Version string `json:"version"`
+		} `json:"languages"`
+		Tools []struct {
+			Name    string `json:"name"`
+			Version string `json:"version"`
+		} `json:"tools"`
+		Hardware map[string]any `json:"hardware"`
 	} `json:"card"`
 }
 
@@ -128,11 +137,37 @@ func (l *AgentListing) FormatForToolDescription() string {
 	var sb strings.Builder
 	sb.WriteString("\n\nAvailable agents in this workspace:\n")
 	for _, a := range l.agents {
-		sb.WriteString(fmt.Sprintf("- %s (%s): %s", a.DisplayName, a.AgentID, a.Description))
+		sb.WriteString(fmt.Sprintf("- %s (%s):", a.DisplayName, a.AgentID))
+
+		var parts []string
+		for _, lang := range a.Card.Languages {
+			parts = append(parts, fmt.Sprintf("%s %s", lang.Name, lang.Version))
+		}
+		for _, tool := range a.Card.Tools {
+			parts = append(parts, tool.Name)
+		}
+		if len(parts) > 0 {
+			sb.WriteString(" " + strings.Join(parts, ", "))
+		} else if a.Description != "" {
+			sb.WriteString(" " + a.Description)
+		}
+
 		if len(a.Card.Tags) > 0 {
 			sb.WriteString(fmt.Sprintf(" [%s]", strings.Join(a.Card.Tags, ", ")))
 		}
-		sb.WriteString(fmt.Sprintf(" — %s\n", a.Status))
+		sb.WriteString(fmt.Sprintf(" — %s", a.Status))
+
+		if cpuSummary, ok := a.Card.Hardware["cpu_summary"].(string); ok {
+			memGB, _ := a.Card.Hardware["memory_gb"].(float64)
+			diskGB, _ := a.Card.Hardware["disk_gb"].(float64)
+			sb.WriteString(fmt.Sprintf("\n  Hardware: %s / %dGB RAM / %dGB disk", cpuSummary, int(memGB), int(diskGB)))
+			if hasGPU, _ := a.Card.Hardware["has_gpu"].(bool); hasGPU {
+				if gpuInfo, ok := a.Card.Hardware["gpu_info"].(string); ok {
+					sb.WriteString(fmt.Sprintf(" / %s", gpuInfo))
+				}
+			}
+		}
+		sb.WriteString("\n")
 	}
 	return sb.String()
 }
