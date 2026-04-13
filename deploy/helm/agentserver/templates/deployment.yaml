@@ -250,6 +250,15 @@ spec:
                   name: {{ .Release.Name }}-secret
                   key: oidc-client-secret
             {{- end }}
+            {{- if .Values.credentialproxy.enabled }}
+            - name: CREDPROXY_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-secret
+                  key: credproxy-encryption-key
+            - name: CREDPROXY_PUBLIC_URL
+              value: {{ printf "http://%s-credentialproxy.%s.svc:%v" .Release.Name .Release.Namespace (int .Values.credentialproxy.port) | quote }}
+            {{- end }}
           livenessProbe:
             httpGet:
               path: /healthz
@@ -284,6 +293,9 @@ stringData:
   {{- if .Values.modelserver.enabled }}
   modelserver-oauth-client-secret: {{ .Values.modelserver.oauth.clientSecret | quote }}
   {{- end }}
+  {{- if .Values.credentialproxy.enabled }}
+  credproxy-encryption-key: {{ .Values.credentialproxy.encryptionKey | quote }}
+  {{- end }}
 {{- else }}
 ---
 apiVersion: v1
@@ -304,5 +316,8 @@ stringData:
   {{- end }}
   {{- if .Values.modelserver.enabled }}
   modelserver-oauth-client-secret: {{ .Values.modelserver.oauth.clientSecret | quote }}
+  {{- end }}
+  {{- if .Values.credentialproxy.enabled }}
+  credproxy-encryption-key: {{ .Values.credentialproxy.encryptionKey | quote }}
   {{- end }}
 {{- end }}

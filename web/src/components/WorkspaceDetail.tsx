@@ -33,6 +33,11 @@ import {
   listWorkspaceIMChannels,
   deleteWorkspaceIMChannel,
   updateWorkspaceIMChannel,
+  listCredentialBindings,
+  createCredentialBinding,
+  deleteCredentialBinding,
+  setDefaultCredentialBinding,
+  type CredentialBinding,
   type Workspace,
   type WorkspaceMember,
   type WorkspaceSandboxDefaults,
@@ -49,7 +54,7 @@ import { WeixinLoginModal } from './WeixinLoginModal'
 import { TelegramConfigModal } from './TelegramConfigModal'
 import { MatrixConfigModal } from './MatrixConfigModal'
 
-export type Tab = 'overview' | 'members' | 'traces' | 'settings'
+export type Tab = 'overview' | 'members' | 'traces' | 'credentials' | 'settings'
 
 interface WorkspaceDetailProps {
   workspace: Workspace
@@ -106,6 +111,7 @@ export function WorkspaceDetail({ workspace, onRename, initialTab }: WorkspaceDe
     { key: 'overview', label: 'Overview', icon: <LayoutDashboard size={15} /> },
     { key: 'members', label: 'Members', icon: <Users size={15} /> },
     { key: 'traces', label: 'Traces', icon: <MessageSquare size={15} /> },
+    { key: 'credentials', label: 'Credentials', icon: <Key size={15} /> },
     { key: 'settings', label: 'Settings', icon: <Settings size={15} /> },
   ]
 
@@ -209,6 +215,9 @@ export function WorkspaceDetail({ workspace, onRename, initialTab }: WorkspaceDe
             fetchDetail={fetchDetail}
             showSandboxId
           />
+        )}
+        {tab === 'credentials' && (
+          <CredentialsTab workspaceId={workspace.id} />
         )}
         {tab === 'settings' && (
           <SettingsTab workspaceId={workspace.id} />
@@ -820,6 +829,209 @@ function SettingsTab({ workspaceId }: { workspaceId: string }) {
           onConnected={() => { loadChannels() }}
         />
       )}
+    </div>
+  )
+}
+
+function CredentialsTab({ workspaceId }: { workspaceId: string }) {
+  const [bindings, setBindings] = useState<CredentialBinding[]>([])
+  const [loading, setLoading] = useState(true)
+  const [showAdd, setShowAdd] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState<CredentialBinding | null>(null)
+
+  const loadBindings = useCallback(() => {
+    setLoading(true)
+    listCredentialBindings(workspaceId, 'k8s')
+      .then(setBindings)
+      .catch(() => setBindings([]))
+      .finally(() => setLoading(false))
+  }, [workspaceId])
+
+  useEffect(() => { loadBindings() }, [loadBindings])
+
+  const handleSetDefault = async (bindingId: string) => {
+    try {
+      await setDefaultCredentialBinding(workspaceId, 'k8s', bindingId)
+      loadBindings()
+    } catch { /* ignore */ }
+  }
+
+  const handleDelete = async () => {
+    if (!confirmDelete) return
+    const id = confirmDelete.id
+    setConfirmDelete(null)
+    try {
+      await deleteCredentialBinding(workspaceId, 'k8s', id)
+      loadBindings()
+    } catch { /* ignore */ }
+  }
+
+  return (
+    <div className="flex flex-col gap-6 max-w-3xl">
+      <div className="rounded-lg border border-[var(--border)] bg-[var(--card)]">
+        <div className="flex items-center justify-between border-b border-[var(--border)] px-5 py-3">
+          <div className="flex items-center gap-2">
+            <Key size={14} className="text-orange-400" />
+            <span className="text-sm font-medium text-[var(--foreground)]">Kubernetes Clusters</span>
+          </div>
+          <button
+            onClick={() => setShowAdd(true)}
+            className="inline-flex items-center gap-1.5 rounded-md border border-orange-500/30 bg-orange-500/10 px-3 py-1.5 text-xs font-medium text-orange-400 hover:bg-orange-500/20 transition-colors"
+          >
+            <Plus size={13} />
+            Add Kubeconfig
+          </button>
+        </div>
+        <div className="px-5 py-4">
+          {loading ? (
+            <p className="text-sm text-[var(--muted-foreground)]">Loading...</p>
+          ) : bindings.length > 0 ? (
+            <div className="flex flex-col gap-2">
+              {bindings.map((b) => (
+                <div key={b.id} className="flex items-center justify-between rounded-md border border-[var(--border)] bg-[var(--background)] px-3 py-2">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <span className="text-sm font-medium text-[var(--foreground)] truncate">{b.display_name}</span>
+                    <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                      b.auth_type === 'bearer'
+                        ? 'bg-blue-500/10 text-blue-400'
+                        : 'bg-purple-500/10 text-purple-400'
+                    }`}>
+                      {b.auth_type === 'bearer' ? 'Token' : 'Client Cert'}
+                    </span>
+                    <span className="text-[11px] text-[var(--muted-foreground)] truncate">{b.server_url}</span>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0 ml-2">
+                    {b.is_default ? (
+                      <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium bg-green-500/10 text-green-400">
+                        Default
+                      </span>
+                    ) : (
+                      <button
+                        onClick={() => handleSetDefault(b.id)}
+                        className="text-[11px] text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors"
+                      >
+                        Set default
+                      </button>
+                    )}
+                    <button
+                      onClick={() => setConfirmDelete(b)}
+                      className="rounded p-1 text-[var(--muted-foreground)] hover:bg-red-500/10 hover:text-red-400 transition-colors"
+                      title="Delete"
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-[var(--muted-foreground)]">
+              No Kubernetes clusters configured. Add a kubeconfig to give sandboxes access to external clusters.
+            </p>
+          )}
+        </div>
+      </div>
+
+      {confirmDelete && (
+        <ConfirmModal
+          title="Delete Credential"
+          message={`Delete the cluster credential "${confirmDelete.display_name}"? New sandboxes will no longer have access to this cluster.`}
+          confirmLabel="Delete"
+          destructive
+          onConfirm={handleDelete}
+          onCancel={() => setConfirmDelete(null)}
+        />
+      )}
+      {showAdd && (
+        <AddKubeconfigModal
+          workspaceId={workspaceId}
+          onClose={() => setShowAdd(false)}
+          onCreated={() => { setShowAdd(false); loadBindings() }}
+        />
+      )}
+    </div>
+  )
+}
+
+function AddKubeconfigModal({ workspaceId, onClose, onCreated }: {
+  workspaceId: string
+  onClose: () => void
+  onCreated: () => void
+}) {
+  const [displayName, setDisplayName] = useState('')
+  const [config, setConfig] = useState('')
+  const [status, setStatus] = useState<'idle' | 'loading' | 'error'>('idle')
+  const [error, setError] = useState('')
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!displayName.trim() || !config.trim()) return
+
+    setStatus('loading')
+    setError('')
+    try {
+      await createCredentialBinding(workspaceId, 'k8s', displayName.trim(), config.trim())
+      onCreated()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to add credential')
+      setStatus('error')
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+      <div className="relative w-full max-w-lg rounded-xl border border-[var(--border)] bg-[var(--card)] p-6 shadow-2xl">
+        <button
+          onClick={onClose}
+          className="absolute right-4 top-4 text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+        >
+          <X size={16} />
+        </button>
+
+        <div className="flex items-center gap-2 mb-4">
+          <Key size={20} className="text-orange-400" />
+          <h2 className="text-lg font-semibold text-[var(--foreground)]">Add Kubeconfig</h2>
+        </div>
+
+        <form onSubmit={handleSubmit}>
+          <label className="block text-xs font-medium text-[var(--muted-foreground)] mb-1">Display Name</label>
+          <input
+            type="text"
+            value={displayName}
+            onChange={(e) => setDisplayName(e.target.value)}
+            placeholder="e.g. production-cluster"
+            autoFocus
+            disabled={status === 'loading'}
+            className="w-full rounded-md border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-1 focus:ring-[var(--primary)] disabled:opacity-50"
+          />
+
+          <label className="block text-xs font-medium text-[var(--muted-foreground)] mb-1 mt-3">Kubeconfig YAML</label>
+          <textarea
+            value={config}
+            onChange={(e) => setConfig(e.target.value)}
+            placeholder="Paste your kubeconfig YAML here..."
+            rows={10}
+            disabled={status === 'loading'}
+            className="w-full rounded-md border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-xs font-mono text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-1 focus:ring-[var(--primary)] disabled:opacity-50 resize-y"
+          />
+
+          <p className="mt-2 text-[11px] text-[var(--muted-foreground)]">
+            Supported auth types: static bearer token or client certificate. Create a dedicated ServiceAccount with limited RBAC for best security.
+          </p>
+
+          {error && (
+            <p className="mt-2 text-xs text-red-400">{error}</p>
+          )}
+
+          <button
+            type="submit"
+            disabled={!displayName.trim() || !config.trim() || status === 'loading'}
+            className="mt-4 w-full inline-flex items-center justify-center gap-2 rounded-md bg-orange-600 px-4 py-2 text-sm font-medium text-white hover:bg-orange-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {status === 'loading' ? 'Validating...' : 'Add Cluster'}
+          </button>
+        </form>
+      </div>
     </div>
   )
 }

@@ -470,6 +470,64 @@ export async function deleteWorkspaceIMChannel(workspaceId: string, channelId: s
   if (!res.ok) throw new Error('Failed to delete IM channel')
 }
 
+// Credential Bindings (kubeconfig / external API credentials)
+
+export interface CredentialBinding {
+  id: string
+  display_name: string
+  server_url: string
+  auth_type: string
+  public_meta: Record<string, any>
+  is_default: boolean
+  created_at: string
+}
+
+export async function listCredentialBindings(workspaceId: string, kind: string): Promise<CredentialBinding[]> {
+  const res = await fetch(`/api/workspaces/${workspaceId}/credentials/${kind}`)
+  if (!res.ok) throw new Error('Failed to list credential bindings')
+  return res.json()
+}
+
+export async function createCredentialBinding(
+  workspaceId: string,
+  kind: string,
+  displayName: string,
+  config: string,
+): Promise<CredentialBinding> {
+  const res = await fetch(`/api/workspaces/${workspaceId}/credentials/${kind}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ display_name: displayName, config }),
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(text || 'Failed to create credential binding')
+  }
+  return res.json()
+}
+
+export async function deleteCredentialBinding(workspaceId: string, kind: string, bindingId: string): Promise<void> {
+  const res = await fetch(`/api/workspaces/${workspaceId}/credentials/${kind}/${bindingId}`, { method: 'DELETE' })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(text || 'Failed to delete credential binding')
+  }
+}
+
+export async function setDefaultCredentialBinding(workspaceId: string, kind: string, bindingId: string): Promise<void> {
+  const res = await fetch(`/api/workspaces/${workspaceId}/credentials/${kind}/${bindingId}/set-default`, { method: 'POST' })
+  if (!res.ok) throw new Error('Failed to set default credential binding')
+}
+
+export async function patchCredentialBinding(workspaceId: string, kind: string, bindingId: string, displayName: string): Promise<void> {
+  const res = await fetch(`/api/workspaces/${workspaceId}/credentials/${kind}/${bindingId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ display_name: displayName }),
+  })
+  if (!res.ok) throw new Error('Failed to update credential binding')
+}
+
 // Workspace-level WeChat QR login
 export async function workspaceWeixinQRStart(workspaceId: string): Promise<{ qrcode_url: string; message: string }> {
   const res = await fetch(`/api/workspaces/${workspaceId}/im/weixin/qr-start`, { method: 'POST' })

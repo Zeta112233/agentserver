@@ -191,6 +191,24 @@ sandboxProxy:
   replicaCount: 1
   port: 8082
 
+credentialproxy:
+  # Credential proxy for secure external API access from sandboxes.
+  # When enabled, sandboxes can use user-uploaded kubeconfigs to access
+  # external k8s clusters without seeing the real credentials.
+  enabled: false
+  image:
+    repository: ghcr.io/agentserver/credentialproxy
+    tag: latest
+    pullPolicy: Always
+  replicaCount: 1
+  port: 8083
+  logLevel: info
+  # 32-byte AES-256 key (base64 or hex encoded). Required when enabled.
+  # Both agentserver and credentialproxy must share the same key.
+  encryptionKey: ""
+  # Override database URL (defaults to shared agentserver database).
+  externalDatabaseUrl: ""
+
 service:
   type: ClusterIP
   port: 8080
