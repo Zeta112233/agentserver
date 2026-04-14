@@ -8,12 +8,50 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 
+	gooidc "github.com/coreos/go-oidc/v3/oidc"
 	"github.com/go-chi/chi/v5"
+	"github.com/agentserver/agentserver/internal/credentialproxy/k8s"
 	"github.com/agentserver/agentserver/internal/credentialproxy/provider"
 	"github.com/agentserver/agentserver/internal/crypto"
 	"github.com/agentserver/agentserver/internal/db"
+	"golang.org/x/oauth2"
 )
+
+// sweepExpiredDeviceFlows periodically removes expired entries from the
+// deviceFlows map to prevent unbounded memory growth from abandoned flows.
+func (s *Server) sweepExpiredDeviceFlows() {
+	ticker := time.NewTicker(2 * time.Minute)
+	defer ticker.Stop()
+	for range ticker.C {
+		now := time.Now()
+		s.deviceFlowsMu.Lock()
+		for id, flow := range s.deviceFlows {
+			if now.After(flow.expiresAt) {
+				delete(s.deviceFlows, id)
+			}
+		}
+		s.deviceFlowsMu.Unlock()
+	}
+}
+
+// pendingDeviceFlow holds state for an in-progress OIDC device code flow.
+type pendingDeviceFlow struct {
+	oauth2Cfg      oauth2.Config
+	deviceAuth     *oauth2.DeviceAuthResponse
+	oidcConfig     k8s.OIDCAuthConfig
+	bindingID      string
+	wsID           string
+	kind           string
+	displayName    string
+	serverURL      string
+	publicMetaJSON json.RawMessage
+	isDefault      bool
+	expiresAt      time.Time
+	completing     sync.Once
+}
 
 func (s *Server) handleListCredentialBindings(w http.ResponseWriter, r *http.Request) {
 	wsID := chi.URLParam(r, "id")
@@ -103,14 +141,6 @@ func (s *Server) handleCreateCredentialBinding(w http.ResponseWriter, r *http.Re
 	}
 	bindingID := base64.URLEncoding.WithPadding(base64.NoPadding).EncodeToString(idBytes)
 
-	// Encrypt auth secret.
-	authBlob, err := crypto.Encrypt(s.EncryptionKey, result.AuthSecret)
-	if err != nil {
-		log.Printf("encrypt credential: %v", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-
 	// Check if this is the first binding for the (workspace, kind) pair.
 	count, err := s.DB.CountCredentialBindings(wsID, kind)
 	if err != nil {
@@ -121,6 +151,20 @@ func (s *Server) handleCreateCredentialBinding(w http.ResponseWriter, r *http.Re
 	isDefault := count == 0
 
 	publicMetaJSON, _ := json.Marshal(result.PublicMeta)
+
+	// OIDC device code flow: initiate and return 202 instead of creating the binding immediately.
+	if result.PendingDeviceAuth {
+		s.handleCreateOIDCBinding(w, r, wsID, kind, bindingID, displayName, result, publicMetaJSON, isDefault)
+		return
+	}
+
+	// Encrypt auth secret.
+	authBlob, err := crypto.Encrypt(s.EncryptionKey, result.AuthSecret)
+	if err != nil {
+		log.Printf("encrypt credential: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 
 	binding := &db.CredentialBinding{
 		ID:          bindingID,
@@ -246,4 +290,194 @@ func (s *Server) handlePatchCredentialBinding(w http.ResponseWriter, r *http.Req
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleCreateOIDCBinding initiates the OIDC device code flow for an OIDC credential binding.
+func (s *Server) handleCreateOIDCBinding(
+	w http.ResponseWriter, r *http.Request,
+	wsID, kind, bindingID, displayName string,
+	result *provider.UploadResult,
+	publicMetaJSON json.RawMessage,
+	isDefault bool,
+) {
+	var oidcCfg k8s.OIDCAuthConfig
+	if err := json.Unmarshal(result.AuthSecret, &oidcCfg); err != nil {
+		log.Printf("unmarshal oidc config: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	// Validate issuer URL (SSRF guard — must be https, not a private IP).
+	if err := k8s.ValidateIssuerURL(oidcCfg.IssuerURL); err != nil {
+		http.Error(w, fmt.Sprintf("invalid OIDC issuer: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	// OIDC discovery.
+	oidcProvider, err := gooidc.NewProvider(r.Context(), oidcCfg.IssuerURL)
+	if err != nil {
+		log.Printf("oidc discovery for %s: %v", oidcCfg.IssuerURL, err)
+		http.Error(w, "OIDC discovery failed", http.StatusBadGateway)
+		return
+	}
+
+	oauth2Cfg := oauth2.Config{
+		ClientID: oidcCfg.ClientID,
+		Endpoint: oidcProvider.Endpoint(),
+		Scopes:   oidcCfg.Scopes,
+	}
+
+	// Initiate device code flow.
+	deviceAuth, err := oauth2Cfg.DeviceAuth(r.Context())
+	if err != nil {
+		log.Printf("device auth request: %v", err)
+		http.Error(w, "device code flow initiation failed", http.StatusBadGateway)
+		return
+	}
+
+	// Store pending flow state.
+	flow := &pendingDeviceFlow{
+		oauth2Cfg:      oauth2Cfg,
+		deviceAuth:     deviceAuth,
+		oidcConfig:     oidcCfg,
+		bindingID:      bindingID,
+		wsID:           wsID,
+		kind:           kind,
+		displayName:    displayName,
+		serverURL:      result.ServerURL,
+		publicMetaJSON: publicMetaJSON,
+		isDefault:      isDefault,
+		expiresAt:      deviceAuth.Expiry,
+	}
+
+	s.deviceFlowsMu.Lock()
+	s.deviceFlows[bindingID] = flow
+	s.deviceFlowsMu.Unlock()
+
+	expiresIn := int(time.Until(deviceAuth.Expiry).Seconds())
+	if expiresIn <= 0 {
+		expiresIn = 900
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"id":                bindingID,
+		"status":            "pending_device_code",
+		"verification_uri":  deviceAuth.VerificationURI,
+		"user_code":         deviceAuth.UserCode,
+		"expires_in":        expiresIn,
+	})
+}
+
+// handleDeviceCodeComplete long-polls until the OIDC device code flow completes.
+func (s *Server) handleDeviceCodeComplete(w http.ResponseWriter, r *http.Request) {
+	wsID := chi.URLParam(r, "id")
+	kind := chi.URLParam(r, "kind")
+	bindingID := chi.URLParam(r, "bindingId")
+
+	s.deviceFlowsMu.Lock()
+	flow, ok := s.deviceFlows[bindingID]
+	s.deviceFlowsMu.Unlock()
+
+	if !ok || flow.wsID != wsID {
+		http.Error(w, "no pending device code flow found", http.StatusNotFound)
+		return
+	}
+
+	// Validate kind matches the flow's original kind.
+	if flow.kind != kind {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+
+	if time.Now().After(flow.expiresAt) {
+		s.deviceFlowsMu.Lock()
+		delete(s.deviceFlows, bindingID)
+		s.deviceFlowsMu.Unlock()
+		http.Error(w, "device code flow expired", http.StatusGone)
+		return
+	}
+
+	// Use sync.Once to prevent concurrent callers from both completing the flow.
+	var (
+		token    *oauth2.Token
+		tokenErr error
+	)
+	flow.completing.Do(func() {
+		token, tokenErr = flow.oauth2Cfg.DeviceAccessToken(r.Context(), flow.deviceAuth)
+	})
+	if token == nil && tokenErr == nil {
+		// Another goroutine is already completing this flow.
+		http.Error(w, "device code flow already being completed", http.StatusConflict)
+		return
+	}
+	if tokenErr != nil {
+		s.deviceFlowsMu.Lock()
+		delete(s.deviceFlows, bindingID)
+		s.deviceFlowsMu.Unlock()
+		log.Printf("device code token exchange: %v", tokenErr)
+		http.Error(w, "device code authorization failed", http.StatusForbidden)
+		return
+	}
+
+	// Build the full OIDCAuthConfig with tokens.
+	oidcCfg := flow.oidcConfig
+	oidcCfg.RefreshToken = token.RefreshToken
+	oidcCfg.AccessToken = token.AccessToken
+	if !token.Expiry.IsZero() {
+		oidcCfg.TokenExpiry = token.Expiry.Format(time.RFC3339)
+	}
+
+	authSecretJSON, err := json.Marshal(oidcCfg)
+	if err != nil {
+		log.Printf("marshal oidc auth secret: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	authBlob, err := crypto.Encrypt(s.EncryptionKey, authSecretJSON)
+	if err != nil {
+		log.Printf("encrypt oidc credential: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	binding := &db.CredentialBinding{
+		ID:          flow.bindingID,
+		WorkspaceID: flow.wsID,
+		Kind:        flow.kind,
+		DisplayName: flow.displayName,
+		ServerURL:   flow.serverURL,
+		PublicMeta:  flow.publicMetaJSON,
+		AuthType:    "oidc",
+		AuthBlob:    authBlob,
+		IsDefault:   flow.isDefault,
+	}
+
+	if err := s.DB.CreateCredentialBinding(binding); err != nil {
+		if strings.Contains(err.Error(), "unique") || strings.Contains(err.Error(), "duplicate") {
+			http.Error(w, "a binding with this display name already exists", http.StatusConflict)
+			return
+		}
+		log.Printf("create credential binding: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	// Clean up flow state.
+	s.deviceFlowsMu.Lock()
+	delete(s.deviceFlows, bindingID)
+	s.deviceFlowsMu.Unlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"id":           flow.bindingID,
+		"display_name": flow.displayName,
+		"server_url":   flow.serverURL,
+		"auth_type":    "oidc",
+		"public_meta":  json.RawMessage(flow.publicMetaJSON),
+		"is_default":   flow.isDefault,
+	})
 }
