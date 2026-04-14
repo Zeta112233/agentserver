@@ -72,7 +72,9 @@ export function WorkspaceEmptyState({ workspaceId, sandboxes }: WorkspaceEmptySt
       done: hasNanoclawIM,
       description: hasNanoclawIM
         ? `${nanoclawWithIM!.name} bound to IM`
-        : 'Create a nanoclaw sandbox and bind it to an IM channel',
+        : hasIM
+          ? 'Use the + button on the left to create a nanoclaw sandbox'
+          : 'Create a nanoclaw sandbox and bind it to an IM channel',
       action: hasIM ? undefined : { label: 'Set up IM first', onClick: goToSettings },
     },
     {
@@ -131,7 +133,7 @@ export function WorkspaceEmptyState({ workspaceId, sandboxes }: WorkspaceEmptySt
                   </div>
 
                   {/* Action */}
-                  {step.action && !step.done && (
+                  {step.action && (
                     <button
                       onClick={step.action.onClick}
                       className="inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--secondary)] transition-colors shrink-0"
