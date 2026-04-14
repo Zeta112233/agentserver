@@ -274,7 +274,7 @@ export default function App() {
       <span className="text-[var(--muted-foreground)]">Creating sandbox...</span>
     </div>
   ) : (
-    <WorkspaceEmptyState workspaceId={selectedWorkspaceId!} />
+    <WorkspaceEmptyState workspaceId={selectedWorkspaceId!} sandboxes={sandboxes} />
   )
 
   const sandboxLayout = (content: React.ReactNode) => (
