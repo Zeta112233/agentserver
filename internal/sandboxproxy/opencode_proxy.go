@@ -114,6 +114,21 @@ func (s *Server) handleSubdomainProxy(w http.ResponseWriter, r *http.Request, sa
 		return
 	}
 
+	// Custom agents skip opencode SPA fallback — go straight to tunnel proxy.
+	if sbx.Type == "custom" {
+		if !sbx.IsLocal {
+			writeErrorPage(w, errPageSandboxNotFound)
+			return
+		}
+		tunnel, ok := s.TunnelRegistry.Get(sbx.ID)
+		if !ok {
+			writeErrorPage(w, errPageAgentOffline)
+			return
+		}
+		s.proxyViaTunnel(w, r, sbx, tunnel)
+		return
+	}
+
 	// Try SPA fallback from embedded opencode frontend before proxying to pod.
 	// Real static files were already served above (before auth); here we only
 	// handle SPA client-side routes that need index.html.
