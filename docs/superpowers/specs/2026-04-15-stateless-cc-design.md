@@ -22,16 +22,17 @@ Introduce a **stateless Claude Code** architecture:
 2. **Context externalized** — session history stored as append-only event log in PostgreSQL, loaded on demand
 3. **Tool execution externalized** — CC emits tool call intents, routed to remote executors (sandboxes / local agents) via MCP
 
-### 1.3 Key Insight
+### 1.3 Key Insights
 
-Claude Code supports `--tools ""` to disable all built-in tools, combined with `--mcp-config` to load a custom MCP server. This enables a **zero-intrusion** approach: CC's agent loop (reasoning, compaction, system prompt assembly) is fully preserved, while all tool side effects are redirected through our custom Tool Router MCP Server.
+**Insight 1: Tool externalization via MCP.** Claude Code supports `--tools ""` to disable all built-in tools, combined with `--mcp-config` to load a custom MCP server. This enables a **zero-intrusion** approach: CC's agent loop (reasoning, compaction, system prompt assembly) is fully preserved, while all tool side effects are redirected through our custom Tool Router MCP Server.
+
+**Insight 2: Stateless execution via bridge mode.** Claude Code's `--sdk-url` flag connects CC to an external bridge server via SSE. In this mode, CC holds **zero state** — conversation history is loaded from the bridge server via SSE replay, and results are written back via HTTP POST. CC processes are fully disposable: if one dies, a new process reconnects to the same bridge session and resumes from where the last one left off. The epoch mechanism ensures consistency.
 
 ```bash
-claude --tools "" \
+claude --sdk-url http://cc-broker:8080/v1/sessions/{session_id} \
+       --tools "" \
        --mcp-config '{"mcpServers":{"tool-router":{"type":"http","url":"..."}}}' \
-       --print --output-format stream-json \
-       --bare --no-session-persistence \
-       "user prompt"
+       --bare
 ```
 
 ## 2. Architecture
@@ -65,7 +66,7 @@ imbridge ──► agentserver ──► cc-broker ──► sandboxproxy
 | Service | Responsibilities | Does NOT handle |
 |---------|-----------------|-----------------|
 | **agentserver** | User auth, workspace/session CRUD, IM inbound routing, event log persistence, bridge SSE to frontend | CC execution, executor connectivity |
-| **cc-broker** | CC Worker Pool, context materialization (DB→JSONL), Tool Router MCP Server, calling sandboxproxy for tool execution | Tunnel management, business logic, executor lifecycle |
+| **cc-broker** | CC worker management, bridge API (context SSE + event persistence), Tool Router MCP Server, calling sandboxproxy for tool execution | Tunnel management, business logic, executor lifecycle |
 | **sandboxproxy** | Tunnel management (WebSocket), sandbox HTTP connectivity, unified tool execution API | Business logic, CC reasoning, executor registration |
 | **executor-registry** | Executor registration (OAuth), heartbeat, capability storage, capability probe triggering | Tunnel management, tool execution |
 | **imbridge** | IM platform long-polling (WeChat/Telegram/Matrix), message forwarding to agentserver, outbound replies | Session management, CC execution |
@@ -153,14 +154,13 @@ func (s *Server) handleIMInbound(w http.ResponseWriter, r *http.Request) {
     // 1. Resolve session by chat_jid (same jid → same session)
     session, err := s.resolveIMSession(r.Context(), workspaceID, msg)
 
-    // 2. Load session event history from DB
-    history, _ := s.db.GetSessionEvents(r.Context(), session.ID)
-
-    // 3. Query available executors in workspace
+    // 2. Query available executors in workspace
     executors, _ := s.executorRegistryClient.ListExecutors(r.Context(), workspaceID)
 
     // 4. Async: call cc-broker (don't block HTTP response)
-    go s.processWithCCBroker(r.Context(), session, history, executors, msg)
+    //    Use background context — r.Context() is cancelled after 202 response
+    bgCtx := context.Background()
+    go s.processWithCCBroker(bgCtx, session, executors, msg)
 
     // 5. Return 202 immediately
     w.WriteHeader(http.StatusAccepted)
@@ -184,14 +184,15 @@ func (s *Server) resolveIMSession(ctx context.Context, workspaceID string, msg I
 
 ```go
 func (s *Server) processWithCCBroker(ctx context.Context, session *AgentSession,
-    history []SessionEvent, executors []ExecutorInfo, msg IMInboundMessage) {
+    executors []ExecutorInfo, msg IMInboundMessage) {
 
     // 1. Call cc-broker ProcessTurn (SSE stream)
+    //    Note: history is NOT passed here — cc-broker loads it from DB
+    //    and serves it to CC via its bridge SSE endpoint
     eventStream, err := s.ccBrokerClient.ProcessTurn(ctx, ProcessTurnRequest{
         SessionID:   session.ID,
         WorkspaceID: session.WorkspaceID,
         UserMessage: msg.Content,
-        History:     history,
         Executors:   executors,
     })
 
@@ -215,83 +216,116 @@ func (s *Server) processWithCCBroker(ctx context.Context, session *AgentSession,
 }
 ```
 
-## 4. Context Management (Event Sourcing)
+## 4. Context Management (Event Sourcing via Bridge)
 
 ### 4.1 Storage
 
-All session messages are stored as append-only events in PostgreSQL, reusing the existing `agent_session_events` table:
+All session messages are stored as append-only events in PostgreSQL, reusing the existing two-table structure:
 
 ```sql
+-- User-visible conversation events
 agent_session_events (
     id            BIGSERIAL,          -- global sequence number
     session_id    TEXT,                -- owning session
     event_id      TEXT UNIQUE,         -- dedup ID
-    event_type    TEXT,                -- 'message' | 'metadata' | 'compaction_boundary'
+    event_type    TEXT,                -- 'message' | 'metadata'
     source        TEXT,                -- 'user' | 'assistant' | 'system' | 'tool_result'
     epoch         INTEGER,            -- which worker wrote this
     payload       JSONB,              -- CC SerializedMessage (stored as-is)
     ephemeral     BOOLEAN,            -- transient messages (not persisted)
     created_at    TIMESTAMPTZ
 )
+
+-- Internal events (compaction, transcript)
+agent_session_internal_events (
+    id            BIGSERIAL,
+    session_id    TEXT,
+    event_type    TEXT,
+    payload       JSONB,
+    is_compaction BOOLEAN DEFAULT FALSE,  -- marks compaction boundaries
+    created_at    TIMESTAMPTZ
+)
 ```
 
-### 4.2 Materialization (DB → JSONL)
+### 4.2 Context Loading via Bridge SSE (No JSONL Materialization)
 
-Before each CC worker invocation, cc-broker materializes the session event log into a JSONL file that CC can load via `--resume`:
+CC connects to cc-broker via `--sdk-url`. Context loading uses the bridge's native SSE replay mechanism — **no JSONL file materialization needed**:
+
+```
+CC worker starts with --sdk-url http://cc-broker:8080/v1/sessions/{id}
+  │
+  ├─ 1. POST .../bridge → attach as worker, get JWT + epoch
+  │     (cc-broker atomically bumps epoch, invalidating any stale worker)
+  │
+  ├─ 2. GET .../worker/events/stream → SSE replay
+  │     cc-broker reads from agent_session_events (by sequence order)
+  │     streams each event as SSE to CC
+  │     CC reconstructs conversation history in-memory
+  │
+  ├─ 3. CC processes current turn (reasoning + tool calls)
+  │
+  └─ 4. POST .../worker/events/batch → write results back
+        cc-broker persists to agent_session_events
+        cc-broker forwards to agentserver via SSE
+```
+
+This approach:
+- Eliminates fragile JSONL serialization/deserialization
+- Reuses the existing bridge API implementation (`internal/bridge/server.go`)
+- Handles `parentUuid` chain reconstruction natively (CC does this internally from SSE events)
+- Supports epoch-based consistency out of the box
+
+### 4.3 Bridge API in cc-broker
+
+cc-broker implements the same bridge API as the existing agentserver bridge (CCR v2 compatible):
 
 ```go
-func materializeSession(ctx context.Context, db *DB, sessionID string) (string, error) {
-    // Optimization: if compaction boundary exists, only load events after it
-    boundary, _ := db.GetLatestCompactionBoundary(ctx, sessionID)
+// cc-broker bridge endpoints (reuse existing bridge/server.go patterns)
+r.Post("/v1/sessions/{id}/bridge",              handleBridgeAttach)    // worker attach, epoch bump
+r.Get("/v1/sessions/{id}/worker/events/stream", handleEventSSE)        // SSE replay
+r.Post("/v1/sessions/{id}/worker/events/batch", handleEventBatch)      // write results
+r.Post("/v1/sessions/{id}/worker/heartbeat",    handleWorkerHeartbeat) // liveness
+```
+
+Event SSE replay with compaction optimization:
+
+```go
+func (b *BridgeHandler) handleEventSSE(w http.ResponseWriter, r *http.Request) {
+    sessionID := chi.URLParam(r, "id")
+
+    // Check for compaction boundary in internal events table
+    boundary, _ := b.db.GetLatestCompaction(ctx, sessionID)
+    // WHERE is_compaction = TRUE ORDER BY id DESC LIMIT 1
 
     var events []SessionEvent
     if boundary != nil {
-        events, _ = db.GetSessionEventsAfter(ctx, sessionID, boundary.Sequence)
+        // Load compaction summary + events after boundary
+        events, _ = b.db.GetSessionEventsAfter(ctx, sessionID, boundary.Sequence)
+        // Prepend compaction summary
+        events = append([]SessionEvent{boundary.AsSummaryEvent()}, events...)
     } else {
-        events, _ = db.GetSessionEvents(ctx, sessionID,
-            WithNonEphemeral(),
-            WithOrderBySequence())
+        events, _ = b.db.GetSessionEvents(ctx, sessionID,
+            WithNonEphemeral(), WithOrderBySequence())
     }
 
-    // Write to CC's expected session path
-    path := filepath.Join(ccLogsDir, projectHash,
-        fmt.Sprintf("session-%s.jsonl", sessionID))
-
-    f, _ := os.Create(path)
-    defer f.Close()
-
-    if boundary != nil {
-        f.Write(boundary.Payload) // summary at top
-        f.Write([]byte("\n"))
-    }
+    // Stream as SSE
+    flusher := w.(http.Flusher)
     for _, evt := range events {
-        f.Write(evt.Payload) // payload is CC's SerializedMessage format
-        f.Write([]byte("\n"))
+        fmt.Fprintf(w, "data: %s\n\n", evt.Payload)
+        flusher.Flush()
     }
-    return path, nil
+    // Keep connection open for new events...
 }
-```
-
-### 4.3 Write Path
-
-After CC processes a turn, cc-broker captures the streaming NDJSON output and forwards each event to agentserver, which persists them:
-
-```
-CC stdout (stream-json NDJSON)
-  → cc-broker parses each line
-  → SSE stream to agentserver
-  → agentserver writes each event to agent_session_events
-  → agentserver broadcasts via bridge SSE to frontend
 ```
 
 ### 4.4 Compaction
 
-CC's built-in auto-compaction remains functional. When conversation grows too long:
+CC's built-in auto-compaction remains functional. Compaction data is stored in `agent_session_internal_events` (consistent with existing codebase):
 
 1. CC triggers compaction (LLM summarizes old messages)
-2. CC outputs a `compaction_boundary` event
-3. agentserver persists the boundary to DB
-4. Next materialization loads only boundary summary + subsequent events
+2. CC writes compaction event via `POST .../worker/events/batch`
+3. cc-broker stores it in `agent_session_internal_events` with `is_compaction = TRUE`
+4. Next SSE replay loads only compaction summary + subsequent events
 
 ## 5. Tool Router MCP Server
 
@@ -458,7 +492,7 @@ CC Turn 4: Reply "部署完成，以下是输出..."
 
 ## 6. CC Broker
 
-### 6.1 API
+### 6.1 External API (agentserver → cc-broker)
 
 ```
 POST /api/turns
@@ -468,7 +502,6 @@ Content-Type: application/json
     "session_id": "cse_xxx",
     "workspace_id": "ws_xxx",
     "user_message": "帮我修复这个 bug",
-    "history": [ ... session events ... ],
     "executors": [ ... executor list ... ]
 }
 
@@ -481,155 +514,164 @@ data: {"event_type":"assistant_message","payload":{...}}
 data: {"event_type":"done","payload":{...}}
 ```
 
-### 6.2 Worker Pool
+Note: `history` is no longer passed in the request. cc-broker loads history from its own DB and serves it to CC via the bridge SSE endpoint (Section 4).
 
-CC broker maintains a pool of headless CC processes for reuse:
+### 6.2 Internal API (CC worker → cc-broker bridge)
+
+cc-broker also exposes the bridge API (Section 4.3) that CC workers connect to via `--sdk-url`. This is an internal API, not called by agentserver.
+
+### 6.3 CC Worker Lifecycle
+
+Each CC worker is a short-lived process spawned per turn. CC connects to cc-broker's bridge endpoint via `--sdk-url`, processes one turn (which may involve multiple tool calls), then exits.
 
 ```go
-type WorkerPool struct {
-    mu        sync.Mutex
-    idle      chan *CCWorker
-    poolSize  int
-    maxUsage  int              // recycle worker after N requests
-    mcpConfig string           // Tool Router MCP Server config
-}
-
 type CCWorker struct {
-    ID         string
-    Process    *exec.Cmd
-    Stdin      io.WriteCloser
-    Stdout     io.ReadCloser
-    Status     WorkerStatus   // idle | busy | draining | dead
-    UsageCount int
+    ID        string
+    Process   *exec.Cmd
+    SessionID string
+    Status    WorkerStatus // starting | running | done | dead
+    StartedAt time.Time
 }
 ```
 
-### 6.3 Worker Startup
+### 6.4 Worker Startup
 
 ```go
-func (p *WorkerPool) spawnWorker() (*CCWorker, error) {
-    cmd := exec.Command("claude",
-        "--print",
-        "--input-format", "stream-json",
-        "--output-format", "stream-json",
-        "--tools", "",                    // disable all built-in tools
-        "--bare",                         // minimal init (no hooks, no LSP, no plugins)
-        "--no-session-persistence",       // no local disk writes
-        "--mcp-config", p.mcpConfigPath,  // Tool Router MCP Server
+func (b *CCBroker) spawnWorker(ctx context.Context, sessionID, workspaceID string) (*CCWorker, error) {
+    // Generate dynamic MCP config with session_id for permission scoping
+    mcpConfig := b.buildMCPConfig(sessionID, workspaceID)
+    mcpConfigPath := writeTempMCPConfig(mcpConfig)
+
+    bridgeURL := fmt.Sprintf("http://localhost:%d/v1/sessions/%s", b.bridgePort, sessionID)
+
+    cmd := exec.CommandContext(ctx, "claude",
+        "--sdk-url", bridgeURL,           // connect to cc-broker's bridge
+        "--tools", "",                     // disable all built-in tools
+        "--mcp-config", mcpConfigPath,     // Tool Router MCP Server
+        "--bare",                          // minimal init
     )
     cmd.Env = append(os.Environ(),
-        "ANTHROPIC_API_KEY="+p.apiKey,
+        "ANTHROPIC_API_KEY="+b.apiKey,
         "CLAUDE_CODE_SIMPLE=1",
     )
-
-    stdin, _ := cmd.StdinPipe()
-    stdout, _ := cmd.StdoutPipe()
     cmd.Start()
 
     return &CCWorker{
-        ID:      uuid.New().String(),
-        Process: cmd,
-        Stdin:   stdin,
-        Stdout:  stdout,
-        Status:  WorkerStatusIdle,
+        ID:        uuid.New().String(),
+        Process:   cmd,
+        SessionID: sessionID,
+        Status:    WorkerStatusStarting,
     }, nil
 }
 ```
 
-### 6.4 Request Processing
+### 6.5 Request Processing
 
 ```go
-func (p *WorkerPool) HandleTurn(ctx context.Context, req ProcessTurnRequest) (<-chan TurnEvent, error) {
-    // 1. Acquire idle worker
-    worker := <-p.idle
-    worker.Status = WorkerStatusBusy
+func (b *CCBroker) HandleTurn(ctx context.Context, req ProcessTurnRequest) (<-chan TurnEvent, error) {
+    // 1. Inject user message into session event log
+    //    (CC will pick it up via bridge SSE replay)
+    b.db.InsertSessionEvent(ctx, req.SessionID, UserMessageEvent(req.UserMessage))
 
-    // 2. Materialize context (DB events → JSONL file)
-    ctxPath, _ := materializeSession(ctx, p.db, req.SessionID, req.History)
-
-    // 3. Generate dynamic MCP config (inject session_id for permission scoping)
-    mcpConfig := p.buildMCPConfig(req.SessionID, req.WorkspaceID)
-
-    // 4. Send input to CC worker stdin
-    input := StreamInput{
-        Resume:      ctxPath,
-        Prompt:      req.UserMessage,
-        MCPConfig:   mcpConfig,
+    // 2. Spawn CC worker connected to this session's bridge
+    worker, err := b.spawnWorker(ctx, req.SessionID, req.WorkspaceID)
+    if err != nil {
+        return nil, err
     }
-    json.NewEncoder(worker.Stdin).Encode(input)
 
-    // 5. Stream output as TurnEvents
-    events := make(chan TurnEvent)
+    // 3. Stream events as CC writes them back via bridge batch endpoint
+    //    cc-broker's bridge handler captures these and forwards to the output channel
+    events := b.bridge.Subscribe(req.SessionID)
+
     go func() {
-        defer close(events)
-        defer p.returnWorker(worker)
-        defer os.Remove(ctxPath)
-
-        scanner := bufio.NewScanner(worker.Stdout)
-        for scanner.Scan() {
-            var event TurnEvent
-            json.Unmarshal(scanner.Bytes(), &event)
-            events <- event
-        }
+        // Wait for CC process to exit
+        worker.Process.Wait()
+        worker.Status = WorkerStatusDone
+        // Cleanup
+        close(events)
     }()
 
     return events, nil
 }
-
-func (p *WorkerPool) returnWorker(w *CCWorker) {
-    w.UsageCount++
-    if w.UsageCount >= p.maxUsage {
-        w.Process.Kill()
-        go func() {
-            newW, _ := p.spawnWorker()
-            p.idle <- newW
-        }()
-        return
-    }
-    w.Status = WorkerStatusIdle
-    p.idle <- w
-}
 ```
 
-### 6.5 Health Management
+### 6.6 Per-Session Turn Serialization
+
+To prevent race conditions when a user sends multiple messages rapidly (common in WeChat), cc-broker enforces **one active turn per session**:
 
 ```go
-func (p *WorkerPool) healthLoop() {
+type TurnLock struct {
+    mu    sync.Mutex
+    locks map[string]chan struct{} // session_id → lock channel
+}
+
+func (t *TurnLock) Acquire(sessionID string) {
+    t.mu.Lock()
+    ch, exists := t.locks[sessionID]
+    if !exists {
+        ch = make(chan struct{}, 1)
+        t.locks[sessionID] = ch
+    }
+    t.mu.Unlock()
+    ch <- struct{}{} // blocks if another turn is active
+}
+
+func (t *TurnLock) Release(sessionID string) {
+    t.mu.Lock()
+    if ch, exists := t.locks[sessionID]; exists {
+        <-ch
+    }
+    t.mu.Unlock()
+}
+```
+
+Usage in HandleTurn:
+
+```go
+func (b *CCBroker) HandleTurn(ctx context.Context, req ProcessTurnRequest) (<-chan TurnEvent, error) {
+    b.turnLock.Acquire(req.SessionID)
+    // ... process turn ...
+    // Release in the cleanup goroutine after CC exits
+}
+```
+
+### 6.7 Health Management
+
+```go
+func (b *CCBroker) healthLoop() {
     ticker := time.NewTicker(30 * time.Second)
     for range ticker.C {
-        p.mu.Lock()
-        for i, w := range p.workers {
-            // Replace exited processes
-            if w.Process.ProcessState != nil && w.Process.ProcessState.Exited() {
-                p.workers[i], _ = p.spawnWorker()
+        b.mu.Lock()
+        for id, w := range b.activeWorkers {
+            // Kill workers that exceed max duration (e.g., 30 minutes)
+            if time.Since(w.StartedAt) > b.maxTurnDuration {
+                w.Process.Kill()
+                delete(b.activeWorkers, id)
             }
-            // Drain workers with high memory usage (Node.js)
-            if getProcessMemoryMB(w.Process.Process.Pid) > p.maxMemoryMB {
-                w.Status = WorkerStatusDraining
+            // Kill workers with excessive memory
+            if getProcessMemoryMB(w.Process.Process.Pid) > b.maxMemoryMB {
+                w.Process.Kill()
+                delete(b.activeWorkers, id)
             }
         }
-        // Replenish pool to target size
-        for len(p.workers) < p.poolSize {
-            w, _ := p.spawnWorker()
-            p.workers = append(p.workers, w)
-            p.idle <- w
-        }
-        p.mu.Unlock()
+        b.mu.Unlock()
     }
 }
 ```
 
-### 6.6 Horizontal Scaling
+### 6.8 Horizontal Scaling
 
-Each cc-broker instance runs its own worker pool. Requests can be routed to any cc-broker instance since all state is in PostgreSQL:
+Each cc-broker instance spawns CC workers on demand. Requests can be routed to any cc-broker instance since all state is in PostgreSQL:
 
 ```
-cc-broker-1 (pool: 4 CC workers)  ←─┐
-cc-broker-2 (pool: 4 CC workers)  ←─┤── Load Balancer
-cc-broker-3 (pool: 4 CC workers)  ←─┘
-                                       ↕
-                                  PostgreSQL
+cc-broker-1  ←─┐
+cc-broker-2  ←─┤── Load Balancer
+cc-broker-3  ←─┘
+                  ↕
+             PostgreSQL (shared event log + session state)
 ```
+
+CC workers are ephemeral — spawned per turn, exit after completion. No process pool or sticky sessions needed.
 
 ## 7. Sandbox Proxy
 
@@ -942,9 +984,10 @@ The `agentserver-agent` binary simplifies significantly:
    - POST cc-broker /api/turns (SSE)
 
 ④ cc-broker:
-   - Materializes context (empty) → JSONL
-   - Acquires CC worker from pool
-   - Starts CC reasoning
+   - Inserts user message into session event log
+   - Acquires per-session turn lock
+   - Spawns CC worker: claude --sdk-url http://cc-broker/v1/sessions/{id} --tools "" --mcp-config ... --bare
+   - CC connects to bridge, replays history via SSE (empty for new session), starts reasoning
 
 ⑤ CC Agent Loop:
    Turn 1: list_executors
@@ -984,35 +1027,87 @@ The `agentserver-agent` binary simplifies significantly:
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
 | Agent Loop | Keep CC as-is | Reuse CC's reasoning, compaction, system prompt — no reimplementation |
+| CC invocation | `--sdk-url` bridge mode | CC holds zero state; context loaded via SSE replay from cc-broker's bridge API |
 | Statelessness | Externalize context + tools | CC process is disposable, any worker handles any session |
 | Context storage | Event Sourcing (PostgreSQL) | Reuse existing `agent_session_events`, append-only, replayable |
+| Context loading | Bridge SSE replay | No JSONL materialization; CC natively loads history from bridge SSE endpoint |
 | Tool routing | MCP Server with `--tools ""` | CC-native, zero intrusion, clean separation |
 | Executor selection | CC (LLM) decides | LLM understands executor capabilities, makes intelligent routing |
 | Capability discovery | CC-driven probing | Flexible, no agent binary updates needed |
 | Service split | 4 services | Clean separation of concerns, independent scaling |
 | Inter-service protocol | HTTP + SSE | Consistent with existing codebase, no new dependencies |
-| Worker management | Process pool with recycling | Avoid cold-start overhead, prevent memory leaks |
+| Worker management | Per-turn process spawning | CC exits after each turn; `--bare` minimizes cold start; no stale process state |
+| Turn serialization | Per-session lock | Prevents concurrent turn processing race conditions |
 | Permission model | Workspace isolation | Session can only access executors in its own workspace |
 
 ## 12. New Components Summary
 
 | Component | Location | Scope |
 |-----------|----------|-------|
-| cc-broker service | New Go service | Core: worker pool, context materialization, Tool Router MCP |
+| cc-broker service | New Go service | Core: bridge API, CC worker management, Tool Router MCP |
 | sandboxproxy service | New Go service (or extract from agentserver) | Tunnel management, unified tool execution API |
 | executor-registry service | New Go service | Executor registration, heartbeat, capability storage |
 | Tool Executor Agent | In sandbox images + agentserver-agent binary | Lightweight HTTP handler for tool execution |
 | IM inbound endpoint | agentserver addition | `POST /api/workspaces/{wid}/im/inbound` |
+| Schema migrations | agentserver DB | `sandbox_id` nullable, `external_id` column, `source` column |
 
-## 13. Migration Path
+## 13. Schema Migrations
 
-1. **Phase 1**: Build executor-registry + sandboxproxy as standalone services
-2. **Phase 2**: Build cc-broker with worker pool and Tool Router MCP Server
-3. **Phase 3**: Add IM inbound endpoint to agentserver, rewire imbridge
-4. **Phase 4**: Modify agentserver-agent to register with executor-registry and connect tunnel to sandboxproxy
-5. **Phase 5**: Deprecate per-agent CC instances, route all reasoning through cc-broker
+### 13.1 `agent_sessions.sandbox_id` → Nullable
 
-## 14. Related Work
+The existing schema requires `sandbox_id NOT NULL`. In the new architecture, IM-originated sessions have no associated sandbox — reasoning is handled by cc-broker, not a per-agent CC.
+
+```sql
+-- Migration: make sandbox_id nullable
+ALTER TABLE agent_sessions ALTER COLUMN sandbox_id DROP NOT NULL;
+
+-- Add external_id for IM session resolution (chat_jid → session mapping)
+ALTER TABLE agent_sessions ADD COLUMN external_id TEXT;
+CREATE UNIQUE INDEX idx_agent_sessions_external_id
+    ON agent_sessions(workspace_id, external_id) WHERE external_id IS NOT NULL;
+
+-- Add source field to identify session origin
+ALTER TABLE agent_sessions ADD COLUMN source TEXT DEFAULT 'agent';
+-- source values: 'agent' (legacy), 'weixin', 'telegram', 'matrix', 'web', 'api'
+```
+
+### 13.2 Executor Tables (in executor-registry DB)
+
+See Section 8.4 for full schema.
+
+## 14. Migration Path
+
+1. **Phase 1**: Schema migrations (sandbox_id nullable, external_id, executor tables)
+2. **Phase 2**: Build executor-registry + sandboxproxy as standalone services
+3. **Phase 3**: Build cc-broker with bridge API, Tool Router MCP Server, and worker management
+4. **Phase 4**: Add IM inbound endpoint to agentserver, rewire imbridge
+5. **Phase 5**: Modify agentserver-agent to register with executor-registry and connect tunnel to sandboxproxy
+6. **Phase 6**: Validate `--tools ""` + MCP tool naming experimentally, adjust if needed
+7. **Phase 7**: Deprecate per-agent CC instances, route all reasoning through cc-broker
+
+## 15. Known Risks and Mitigations
+
+### 15.1 MCP Tool Naming Collision (Must Validate)
+
+When `--tools ""` disables built-in tools and the MCP server provides tools with the same names (Bash, Read, Edit, etc.), CC's internal permission system may still apply deny rules to these names. **This must be validated experimentally before implementation.** If naming conflicts occur, MCP tools should be renamed (e.g., `remote_bash`, `remote_read`) and the Tool Router adjusted accordingly.
+
+### 15.2 Token Security
+
+Executor `tunnel_token` and `registry_token` should be hashed at rest (SHA-256) in the executor-registry database. Raw tokens are returned only once at registration time. sandboxproxy validates tunnel tokens by hashing the presented token and comparing against the stored hash.
+
+### 15.3 Long-Running Tool Calls
+
+Tool calls like model training may run for extended periods. The sandboxproxy `/api/execute` endpoint supports a configurable timeout per request. For commands expected to run longer than the timeout:
+
+- The Tool Executor Agent should support an **async execution mode**: return a task ID immediately, provide a poll endpoint for status/output
+- The Tool Router MCP Server exposes a corresponding `poll_task(executor_id, task_id)` tool for CC to check progress
+- This is a Phase 2 enhancement; Phase 1 uses synchronous execution with a generous default timeout (10 minutes)
+
+### 15.4 Executor List Injection
+
+The `list_executors` tool call costs a turn. As an optimization, the executor list can be injected into the CC system prompt via `--append-system-prompt` so CC always has current executor info without an explicit tool call. This can be implemented in cc-broker when constructing the CC worker startup command.
+
+## 16. Related Work
 
 - **InfiAgent** (arXiv, Jan 2026): File system as authoritative state record; agents reconstruct context from externalized state snapshots
 - **"Externalization in LLM Agents"** (arXiv, Apr 2026): Unified review of memory/skills/protocols externalization; introduces "harness engineering" concept
