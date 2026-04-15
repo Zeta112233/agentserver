@@ -45,14 +45,26 @@ func serveK8sProxy(w http.ResponseWriter, r *http.Request, binding *provider.Dec
 	// Remove the sandbox's proxy_token from the Authorization header.
 	r.Header.Del("Authorization")
 
-	// Inject real credentials.
-	if binding.AuthType == "bearer" {
+	// Inject real credentials based on auth type.
+	switch binding.AuthType {
+	case "bearer":
 		if err := injectBearerAuth(r, binding); err != nil {
 			http.Error(w, "credential injection error", http.StatusInternalServerError)
 			return
 		}
+	case "oidc":
+		token, err := getOIDCBearerToken(r.Context(), binding.ID, binding.AuthSecret)
+		if err != nil {
+			http.Error(w, "oidc token refresh failed", http.StatusBadGateway)
+			return
+		}
+		r.Header.Set("Authorization", "Bearer "+token)
+	case "client_cert":
+		// Credentials are in the TLS transport -- no header needed.
+	default:
+		http.Error(w, "unsupported auth type", http.StatusInternalServerError)
+		return
 	}
-	// For client_cert auth, credentials are in the TLS transport -- no header needed.
 
 	handler := utilproxy.NewUpgradeAwareHandler(upstream, transport, false, false, &errorResponder{})
 	handler.ServeHTTP(w, r)

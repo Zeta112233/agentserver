@@ -26,11 +26,12 @@ type Provider interface {
 
 // UploadResult is returned by ParseUpload with fields to persist.
 type UploadResult struct {
-	DisplayName string
-	ServerURL   string
-	PublicMeta  map[string]any
-	AuthType    string
-	AuthSecret  []byte // plaintext; will be encrypted before storage
+	DisplayName       string
+	ServerURL         string
+	PublicMeta        map[string]any
+	AuthType          string
+	AuthSecret        []byte // plaintext; will be encrypted before storage
+	PendingDeviceAuth bool   // true = requires device code flow before credential is usable
 }
 
 // BindingMeta contains non-secret fields of a credential binding.

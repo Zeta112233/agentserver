@@ -1,6 +1,7 @@
 package k8s
 
 import (
+	"encoding/json"
 	"net"
 	"os"
 	"strings"
@@ -53,14 +54,57 @@ func TestParseKubeconfig_ValidClientCert(t *testing.T) {
 	}
 }
 
-func TestParseKubeconfig_RejectExecPlugin(t *testing.T) {
+func TestParseKubeconfig_RejectNonOIDCExecPlugin(t *testing.T) {
 	data := readTestdata(t, "exec-plugin.yaml")
 	_, err := ParseKubeconfig("", data)
 	if err == nil {
-		t.Fatal("expected error for exec plugin")
+		t.Fatal("expected error for non-OIDC exec plugin (AWS EKS)")
 	}
 	if !strings.Contains(err.Error(), "exec plugin") {
 		t.Errorf("error should mention exec plugin, got: %v", err)
+	}
+}
+
+func TestParseKubeconfig_OIDCExecPlugin(t *testing.T) {
+	data := readTestdata(t, "oidc-exec.yaml")
+	result, err := ParseKubeconfig("", data)
+	if err != nil {
+		t.Fatalf("ParseKubeconfig: %v", err)
+	}
+	if result.AuthType != "oidc" {
+		t.Errorf("auth_type = %q, want %q", result.AuthType, "oidc")
+	}
+	if !result.PendingDeviceAuth {
+		t.Error("expected PendingDeviceAuth=true for OIDC exec plugin")
+	}
+	if result.ServerURL != "https://k8s-api.example.com:6443" {
+		t.Errorf("server_url = %q", result.ServerURL)
+	}
+	if result.DisplayName != "k8s-nj-prod" {
+		t.Errorf("display_name = %q", result.DisplayName)
+	}
+	if len(result.AuthSecret) == 0 {
+		t.Fatal("expected non-empty auth_secret")
+	}
+
+	// Verify the parsed OIDC config.
+	var cfg OIDCAuthConfig
+	if err := json.Unmarshal(result.AuthSecret, &cfg); err != nil {
+		t.Fatalf("unmarshal auth_secret: %v", err)
+	}
+	if cfg.IssuerURL != "https://connect.cs.ac.cn" {
+		t.Errorf("issuer_url = %q", cfg.IssuerURL)
+	}
+	if cfg.ClientID != "5db2449e-3671-413a-b34f-33226e9187ad" {
+		t.Errorf("client_id = %q", cfg.ClientID)
+	}
+	// Should have openid + offline_access.
+	wantScopes := map[string]bool{"openid": true, "offline_access": true}
+	for _, s := range cfg.Scopes {
+		delete(wantScopes, s)
+	}
+	if len(wantScopes) > 0 {
+		t.Errorf("missing scopes: %v, got: %v", wantScopes, cfg.Scopes)
 	}
 }
 

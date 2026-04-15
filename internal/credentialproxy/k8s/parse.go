@@ -59,11 +59,12 @@ func ParseKubeconfig(_ string, raw []byte) (*provider.UploadResult, error) {
 	}
 
 	return &provider.UploadResult{
-		DisplayName: displayName,
-		ServerURL:   serverURL,
-		PublicMeta:  publicMeta,
-		AuthType:    authType,
-		AuthSecret:  authSecret,
+		DisplayName:       displayName,
+		ServerURL:         serverURL,
+		PublicMeta:        publicMeta,
+		AuthType:          authType,
+		AuthSecret:        authSecret,
+		PendingDeviceAuth: authType == "oidc",
 	}, nil
 }
 
@@ -147,7 +148,12 @@ func extractCA(cluster *clientcmdapi.Cluster) (string, error) {
 
 func extractAuth(user *clientcmdapi.AuthInfo) (string, []byte, error) {
 	if user.Exec != nil {
-		return "", nil, fmt.Errorf("exec plugin is not supported; create a dedicated ServiceAccount and upload its static-token kubeconfig")
+		oidcCfg, err := parseOIDCExecPlugin(user.Exec)
+		if err != nil {
+			return "", nil, fmt.Errorf("exec plugin is not supported; create a dedicated ServiceAccount and upload its static-token kubeconfig")
+		}
+		secret, _ := json.Marshal(oidcCfg)
+		return "oidc", secret, nil
 	}
 	if user.AuthProvider != nil {
 		return "", nil, fmt.Errorf("auth-provider is not supported; create a dedicated ServiceAccount and upload its static-token kubeconfig")

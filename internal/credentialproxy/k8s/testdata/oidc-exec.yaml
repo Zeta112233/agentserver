@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: Config
+current-context: k8s-nj-prod
+clusters:
+  - name: k8s-nj-prod
+    cluster:
+      server: https://k8s-api.example.com:6443
+      certificate-authority-data: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCmR1bW15Ci0tLS0tRU5EIENFUlRJRklDQVRFLS0tLS0t
+users:
+  - name: k8s-nj-prod
+    user:
+      exec:
+        apiVersion: client.authentication.k8s.io/v1
+        args:
+          - oidc-login
+          - get-token
+          - --oidc-issuer-url=https://connect.cs.ac.cn
+          - --oidc-client-id=5db2449e-3671-413a-b34f-33226e9187ad
+          - --grant-type=device-code
+          - --oidc-extra-scope=offline_access
+        command: kubectl
+        interactiveMode: IfAvailable
+contexts:
+  - name: k8s-nj-prod
+    context:
+      cluster: k8s-nj-prod
+      user: k8s-nj-prod
