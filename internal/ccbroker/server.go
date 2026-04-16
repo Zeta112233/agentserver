@@ -45,6 +45,9 @@ func (s *Server) Routes() http.Handler {
 		w.Write([]byte("ok"))
 	})
 
+	// External API
+	r.Post("/api/turns", s.handleProcessTurn)
+
 	// Session lifecycle
 	r.Post("/v1/sessions", s.handleCreateSession)
 	r.Post("/v1/sessions/{sessionId}/bridge", s.handleBridge)
