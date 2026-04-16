@@ -1440,15 +1440,45 @@ Plan mode (`EnterPlanMode` → present plan → `ExitPlanMode` with user approva
 3. User replies "ok" → cc-broker injects approval → CC exits plan mode and starts implementation
 4. User replies with feedback → cc-broker injects as user message → CC revises plan
 
-### 16.3 Agent Tool — Local Subagents
+### 16.3 Agent Tool — Subagents and Remote Worktree Isolation
 
-CC's Agent tool can spawn subagents for parallel work. In our design:
+CC's Agent tool spawns subagents as **same-process async generators** (not separate OS processes). Multiple subagents can run in parallel, each with independent conversation context but sharing the same MCP tools (Tool Router).
 
-- **Local subagents** work: they share the parent's bridge session and MCP tools
-- **Remote isolation** (`isolation: "worktree"`) is not available (no local git repo)
-- Subagents inherit the parent worker's FUSE mounts and MCP config
+**What works natively:**
+- Subagents share the parent's bridge session, FUSE mounts, and MCP config
+- Multiple async subagents run concurrently via independent async generators
+- Each subagent can call tools on any executor (executor_id is per-tool-call)
+- Cross-executor parallelism: subagent A works on dev machine while subagent B works on GPU sandbox
 
-No changes needed — this works natively with bridge mode.
+**Worktree isolation — remote instead of local:**
+
+CC's built-in `EnterWorktree` tool creates local git worktrees, which doesn't work in our design (no local repo). However, worktree isolation is **better** achieved on the remote executor via normal tool calls:
+
+```
+CC main agent: "帮我同时重构前端和后端"
+  │
+  ├─ Subagent A (background): "重构前端"
+  │   Bash(executor="agt_dev", "git worktree add /tmp/wt-frontend -b refactor-frontend")
+  │   Read(executor="agt_dev", file_path="/tmp/wt-frontend/src/App.tsx")
+  │   Edit(executor="agt_dev", file_path="/tmp/wt-frontend/src/App.tsx", ...)
+  │   Bash(executor="agt_dev", "cd /tmp/wt-frontend && npm test")
+  │
+  ├─ Subagent B (background): "重构后端"
+  │   Bash(executor="agt_dev", "git worktree add /tmp/wt-backend -b refactor-backend")
+  │   Read(executor="agt_dev", file_path="/tmp/wt-backend/cmd/server.go")
+  │   Edit(executor="agt_dev", file_path="/tmp/wt-backend/cmd/server.go", ...)
+  │   Bash(executor="agt_dev", "cd /tmp/wt-backend && go test ./...")
+  │
+  └─ Both complete → main agent merges:
+     Bash(executor="agt_dev", "cd ~/repo && git merge refactor-frontend && git merge refactor-backend")
+     Bash(executor="agt_dev", "git worktree remove /tmp/wt-frontend && git worktree remove /tmp/wt-backend")
+```
+
+This is **more powerful** than CC's built-in worktree isolation because:
+- Worktrees can be created on **any executor**, not just the local machine
+- Multiple subagents can work on the **same remote repo** with full git isolation
+- CC acts as a central orchestrator, managing worktrees across executors via tool calls
+- No special `EnterWorktree` tool needed — standard `Bash` + `git worktree` commands suffice
 
 ## 17. Feature Coverage Audit
 
@@ -1479,7 +1509,7 @@ Comprehensive audit of all CC features against the stateless design:
 |---------|-----------|
 | AskUserQuestion | Async via IM bridge (Section 16.1) |
 | Plan Mode | Async approval via IM (Section 16.2) |
-| Agent Tool (local) | Works natively; remote isolation unavailable |
+| Agent Tool | Local subagents work natively; worktree isolation via remote `git worktree` on executor (more powerful than CC's built-in) |
 | Edit (no undo) | Works but file checkpointing disabled; no undo |
 | Error Recovery | Session-level via bridge; mid-turn crashes lose in-memory state |
 
@@ -1488,7 +1518,7 @@ Comprehensive audit of all CC features against the stateless design:
 | Feature | Reason | Impact |
 |---------|--------|--------|
 | LSP | Requires local file indexing; incompatible with FUSE read-only cwd | Code navigation unavailable; CC can still read/grep files via MCP |
-| Worktrees | No local git repo | Git isolation via executor instead |
+| Worktrees (built-in) | No local git repo; `EnterWorktree` tool not exposed | Remote worktree via `Bash` + `git worktree` on executor (Section 16.3) |
 | CronCreate (recurring) | Worker exits per turn | Use agentserver-level scheduler for recurring tasks |
 | ScheduleWakeup | Worker exits per turn | External job scheduler instead |
 | File Attribution | No local files to track | Tool calls execute on remote executors |
