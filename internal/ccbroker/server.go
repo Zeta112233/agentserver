@@ -15,21 +15,23 @@ import (
 )
 
 type Server struct {
-	config Config
-	store  *Store
-	sse    *SSEBroker
-	dedup  *DedupRegistry
-	logger *slog.Logger
+	config   Config
+	store    *Store
+	sse      *SSEBroker
+	dedup    *DedupRegistry
+	turnLock *TurnLock
+	logger   *slog.Logger
 }
 
 func NewServer(cfg Config, store *Store) *Server {
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: cfg.LogLevel}))
 	return &Server{
-		config: cfg,
-		store:  store,
-		sse:    NewSSEBroker(),
-		dedup:  NewDedupRegistry(),
-		logger: logger,
+		config:   cfg,
+		store:    store,
+		sse:      NewSSEBroker(),
+		dedup:    NewDedupRegistry(),
+		turnLock: NewTurnLock(),
+		logger:   logger,
 	}
 }
 
@@ -42,6 +44,9 @@ func (s *Server) Routes() http.Handler {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ok"))
 	})
+
+	// External API
+	r.Post("/api/turns", s.handleProcessTurn)
 
 	// Session lifecycle
 	r.Post("/v1/sessions", s.handleCreateSession)
