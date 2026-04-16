@@ -43,6 +43,7 @@ func (s *Server) Routes() http.Handler {
 	r.Get("/api/executors/{id}", s.handleGetExecutor)
 	r.Put("/api/executors/{id}/capabilities", s.handleUpdateCapabilities)
 	r.Get("/api/tunnel/{executor_id}", s.handleTunnel)
+	r.Post("/api/execute", s.handleExecute)
 
 	return r
 }
