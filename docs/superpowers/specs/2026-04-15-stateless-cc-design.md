@@ -128,23 +128,47 @@ WeChat user sends message
 
 ### 3.3 imbridge Change
 
-The only change in imbridge: `forwardToNanoClaw()` becomes `forwardToAgentserver()`.
+imbridge supports **per-channel routing** — each IM channel has a configurable `routing_mode` that determines how messages are consumed. This is managed in the workspace's IM channel management panel.
+
+**Routing modes:**
+
+| Mode | Target | Description |
+|------|--------|-------------|
+| `nanoclaw` | NanoClaw Pod (existing) | Forward to `http://{podIP}:3002/message`. Existing flow, fully preserved. |
+| `stateless_cc` | agentserver → cc-broker | Forward to `POST /api/workspaces/{wid}/im/inbound`. New stateless CC flow. |
+
+**Schema change:**
+
+```sql
+ALTER TABLE workspace_im_channels ADD COLUMN routing_mode TEXT DEFAULT 'nanoclaw';
+-- 'nanoclaw' = existing flow (default, backward-compatible)
+-- 'stateless_cc' = new stateless CC flow
+```
+
+**imbridge routing logic:**
 
 ```go
-// Before: direct to pod
-func (b *Bridge) forwardToNanoClaw(ctx context.Context, binding BridgeBinding, msg InboundMessage) error {
-    podIP := binding.SandboxPodIP
-    return httpPost(fmt.Sprintf("http://%s:3002/message", podIP), msg)
-}
-
-// After: to agentserver unified inbound endpoint
 func (b *Bridge) forwardMessage(ctx context.Context, binding BridgeBinding, msg InboundMessage) error {
-    return httpPost(
-        fmt.Sprintf("%s/api/workspaces/%s/im/inbound", b.agentserverURL, binding.WorkspaceID),
-        msg,
-    )
+    switch binding.RoutingMode {
+    case "nanoclaw":
+        // Existing flow: direct to NanoClaw pod
+        podIP := binding.SandboxPodIP
+        return httpPost(fmt.Sprintf("http://%s:3002/message", podIP), msg)
+        
+    case "stateless_cc":
+        // New flow: to agentserver unified inbound endpoint
+        return httpPost(
+            fmt.Sprintf("%s/api/workspaces/%s/im/inbound", b.agentserverURL, binding.WorkspaceID),
+            msg,
+        )
+        
+    default:
+        return fmt.Errorf("unknown routing_mode: %s", binding.RoutingMode)
+    }
 }
 ```
+
+Users can configure each channel's routing mode through the workspace IM channel management panel. Existing channels default to `nanoclaw` (zero-impact migration). New channels or migrated channels can be switched to `stateless_cc`.
 
 ### 3.4 agentserver IM Inbound Endpoint
 
