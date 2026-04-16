@@ -97,6 +97,8 @@ services:
       CCBROKER_PORT: "8085"
       CCBROKER_JWT_SECRET: "dev-secret-change-in-production-32chars"
       CCBROKER_LOG_LEVEL: "info"
+      CCBROKER_EXECUTOR_REGISTRY_URL: "http://executor-registry:8084"
+      CCBROKER_AGENTSERVER_URL: "http://server:8080"
     ports:
       - "8085:8085"
     depends_on:
