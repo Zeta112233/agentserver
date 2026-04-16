@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -39,7 +40,11 @@ func (s *Server) handleIMInbound(w http.ResponseWriter, r *http.Request) {
 
 	// 1. Resolve session by chat_jid
 	session, err := s.DB.GetSessionByExternalID(r.Context(), workspaceID, msg.ChatJID)
-	if err != nil || session == nil {
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if session == nil {
 		// Create new session
 		sessionID := "cse_" + uuid.NewString()
 		title := fmt.Sprintf("IM: %s", msg.SenderName)
@@ -51,7 +56,10 @@ func (s *Server) handleIMInbound(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "failed to set external ID", http.StatusInternalServerError)
 			return
 		}
-		session, _ = s.DB.GetAgentSession(sessionID)
+		session = &db.AgentSession{
+			ID:          sessionID,
+			WorkspaceID: workspaceID,
+		}
 	}
 
 	if session == nil {
@@ -67,10 +75,13 @@ func (s *Server) handleIMInbound(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusAccepted)
 }
 
-func (s *Server) processWithCCBroker(_ context.Context, session *db.AgentSession, msg IMInboundMessage) {
+func (s *Server) processWithCCBroker(ctx context.Context, session *db.AgentSession, msg IMInboundMessage) {
 	if s.CCBrokerURL == "" {
 		return
 	}
+
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	defer cancel()
 
 	body, _ := json.Marshal(map[string]interface{}{
 		"session_id":   session.ID,
@@ -78,7 +89,13 @@ func (s *Server) processWithCCBroker(_ context.Context, session *db.AgentSession
 		"user_message": msg.Content,
 	})
 
-	resp, err := http.Post(s.CCBrokerURL+"/api/turns", "application/json", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, "POST", s.CCBrokerURL+"/api/turns", bytes.NewReader(body))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		// Log error but don't crash — user already got 202
 		return

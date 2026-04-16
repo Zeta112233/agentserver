@@ -348,6 +348,9 @@ func (b *Bridge) forwardToAgentserver(ctx context.Context, binding BridgeBinding
 		return false, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if secret := os.Getenv("INTERNAL_API_SECRET"); secret != "" {
+		req.Header.Set("X-Internal-Secret", secret)
+	}
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

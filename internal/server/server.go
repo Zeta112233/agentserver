@@ -181,6 +181,20 @@ func (s *Server) Router() http.Handler {
 		r.Post("/api/internal/nanoclaw/{id}/weixin/send", imbridgeProxy) // legacy alias
 	}
 
+	// Internal API — IM inbound handler (stateless CC sessions via cc-broker).
+	// Not behind user auth; validated by internal shared secret.
+	r.Post("/api/workspaces/{wid}/im/inbound", func(w http.ResponseWriter, r *http.Request) {
+		secret := os.Getenv("INTERNAL_API_SECRET")
+		if secret != "" {
+			auth := r.Header.Get("X-Internal-Secret")
+			if auth != secret {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+		}
+		s.handleIMInbound(w, r)
+	})
+
 	// Agent registration (auth via OAuth Bearer token).
 	r.Post("/api/agent/register", s.handleAgentRegister)
 
@@ -335,9 +349,6 @@ func (s *Server) Router() http.Handler {
 			r.Post("/api/sandboxes/{id}/weixin/qr-start", imbridgeProxy)
 			r.Post("/api/sandboxes/{id}/weixin/qr-wait", imbridgeProxy)
 		}
-
-		// IM inbound handler (stateless CC sessions via cc-broker)
-		r.Post("/api/workspaces/{wid}/im/inbound", s.handleIMInbound)
 
 		// Agent discovery
 		r.Get("/api/workspaces/{wid}/agents", s.handleListAgentCards)
