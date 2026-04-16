@@ -24,15 +24,15 @@ Introduce a **stateless Claude Code** architecture:
 
 ### 1.3 Key Insights
 
-**Insight 1: Tool externalization via MCP.** Claude Code supports `--tools ""` to disable all built-in tools, combined with `--mcp-config` to load a custom MCP server. This enables a **zero-intrusion** approach: CC's agent loop (reasoning, compaction, system prompt assembly) is fully preserved, while all tool side effects are redirected through our custom Tool Router MCP Server.
+**Insight 1: Tool externalization via MCP.** Claude Code supports `--tools` to selectively enable built-in tools, combined with `--mcp-config` to load a custom MCP server. We use `--tools "WebSearch,WebFetch"` to preserve CC's native web capabilities (no executor needed), while all filesystem/execution tools (Bash, Read, Edit, etc.) are disabled and replaced by our custom Tool Router MCP Server that routes to remote executors.
 
 **Insight 2: Stateless execution via bridge mode.** Claude Code's `--sdk-url` flag connects CC to an external bridge server via SSE. In this mode, CC holds **zero state** — conversation history is loaded from the bridge server via SSE replay, and results are written back via HTTP POST. CC processes are fully disposable: if one dies, a new process reconnects to the same bridge session and resumes from where the last one left off. The epoch mechanism ensures consistency.
 
 ```bash
 claude --sdk-url http://cc-broker:8080/v1/sessions/{session_id} \
-       --tools "" \
+       --tools "WebSearch,WebFetch" \
        --mcp-config '{"mcpServers":{"tool-router":{"type":"http","url":"..."}}}' \
-       --bare
+       --no-session-persistence
 ```
 
 ## 2. Architecture
@@ -564,7 +564,7 @@ func (b *CCBroker) spawnWorker(ctx context.Context, sessionID, workspaceID strin
 
     cmd := exec.CommandContext(ctx, "claude",
         "--sdk-url", bridgeURL,           // connect to cc-broker's bridge
-        "--tools", "",                     // disable all built-in tools
+        "--tools", "WebSearch,WebFetch",                     // disable all built-in tools
         "--mcp-config", mcpConfigPath,     // Tool Router MCP Server
         "--bare",                          // minimal init
     )
@@ -1049,7 +1049,7 @@ The `agentserver-agent` binary simplifies significantly:
 | Statelessness | Externalize context + tools | CC process is disposable, any worker handles any session |
 | Context storage | Event Sourcing (PostgreSQL) | Reuse existing `agent_session_events`, append-only, replayable |
 | Context loading | Bridge SSE replay | No JSONL materialization; CC natively loads history from bridge SSE endpoint |
-| Tool routing | MCP Server with `--tools ""` | CC-native, zero intrusion, clean separation |
+| Tool routing | MCP Server with `--tools "WebSearch,WebFetch"` | Preserve CC's native web tools; all executor-bound tools via MCP |
 | Executor selection | CC (LLM) decides | LLM understands executor capabilities, makes intelligent routing |
 | Capability discovery | CC-driven probing | Flexible, no agent binary updates needed |
 | Service split | 5 services | agentserver, cc-broker, sandboxproxy, executor-registry, OpenViking; clean separation, independent scaling |
@@ -1287,7 +1287,7 @@ func (b *CCBroker) spawnWorker(ctx context.Context, sessionID, workspaceID strin
 
     cmd := exec.CommandContext(ctx, "claude",
         "--sdk-url", bridgeURL,
-        "--tools", "",
+        "--tools", "WebSearch,WebFetch",
         "--mcp-config", mcpConfigPath,
         "--no-session-persistence",
     )
@@ -1348,17 +1348,166 @@ These are disabled via env vars because they are **structurally incompatible** w
 | Worktrees | No local git repo | Not exposed in MCP tool set |
 | Keychain/OAuth | Managed environment; API key via env var | `ANTHROPIC_API_KEY` env var |
 
-## 16. Known Risks and Mitigations
+## 16. User Interaction in Headless Mode
 
-### 15.1 MCP Tool Naming Collision (Must Validate)
+### 16.1 AskUserQuestion — Async via IM Bridge
 
-When `--tools ""` disables built-in tools and the MCP server provides tools with the same names (Bash, Read, Edit, etc.), CC's internal permission system may still apply deny rules to these names. **This must be validated experimentally before implementation.** If naming conflicts occur, MCP tools should be renamed (e.g., `remote_bash`, `remote_read`) and the Tool Router adjusted accordingly.
+CC's `AskUserQuestion` tool requires user input. In headless mode, there's no terminal UI. We solve this by routing questions through the IM bridge asynchronously.
 
-### 15.2 Token Security
+**Flow:**
+
+```
+CC calls AskUserQuestion("Which framework?", options=["React", "Vue"])
+  │
+  ▼
+Tool Router MCP Server intercepts (this is NOT routed to an executor)
+  │
+  ▼
+cc-broker forwards question to agentserver via SSE event:
+  data: {"event_type":"user_question","payload":{"question":"...","options":[...]}}
+  │
+  ▼
+agentserver sends question to user via imbridge:
+  "CC 想问你一个问题：Which framework?\n1. React\n2. Vue\n请回复数字选择"
+  │
+  ▼
+用户在微信回复: "1"
+  │
+  ▼
+imbridge → agentserver detects this is a pending question response
+  │
+  ▼
+agentserver injects answer into the bridge session as a user message:
+  POST cc-broker /v1/sessions/{id}/worker/events/batch
+  {"type":"user","message":{"content":"React"}}
+  │
+  ▼
+CC receives the answer and continues reasoning
+```
+
+**Implementation in Tool Router:**
+
+```go
+// AskUserQuestion is handled by cc-broker, not by an executor
+func (r *ToolRouter) HandleToolCall(ctx context.Context, req MCPToolCallRequest) (MCPToolResult, error) {
+    if req.Name == "AskUserQuestion" {
+        // Forward question to agentserver as a special event
+        r.bridge.PublishQuestion(ctx, req.Meta["session_id"], req.Arguments)
+        
+        // Block until user responds (agentserver injects answer via bridge)
+        answer, err := r.bridge.WaitForAnswer(ctx, req.Meta["session_id"], 
+            timeout: 10*time.Minute)
+        
+        return MCPToolResult{
+            Content: []ContentBlock{{Type: "text", Text: answer}},
+        }, nil
+    }
+    // ... normal tool routing
+}
+```
+
+**Pending question tracking in agentserver:**
+
+```go
+// agentserver tracks pending questions per session
+type PendingQuestion struct {
+    SessionID string
+    Question  string
+    Options   []string
+    AskedAt   time.Time
+}
+
+func (s *Server) handleIMInbound(w http.ResponseWriter, r *http.Request) {
+    // Check if there's a pending question for this session
+    pending, exists := s.pendingQuestions[session.ID]
+    if exists {
+        // This message is an answer, not a new task
+        s.ccBrokerClient.InjectAnswer(ctx, session.ID, msg.Content)
+        delete(s.pendingQuestions, session.ID)
+        w.WriteHeader(http.StatusAccepted)
+        return
+    }
+    // ... normal message processing
+}
+```
+
+### 16.2 Plan Mode — Async Approval via IM
+
+Plan mode (`EnterPlanMode` → present plan → `ExitPlanMode` with user approval) follows the same async pattern as AskUserQuestion:
+
+1. CC enters plan mode, writes plan content
+2. cc-broker sends plan to user via IM: "这是我的实施计划：\n{plan}\n\n请回复'ok'批准或提出修改意见"
+3. User replies "ok" → cc-broker injects approval → CC exits plan mode and starts implementation
+4. User replies with feedback → cc-broker injects as user message → CC revises plan
+
+### 16.3 Agent Tool — Local Subagents
+
+CC's Agent tool can spawn subagents for parallel work. In our design:
+
+- **Local subagents** work: they share the parent's bridge session and MCP tools
+- **Remote isolation** (`isolation: "worktree"`) is not available (no local git repo)
+- Subagents inherit the parent worker's FUSE mounts and MCP config
+
+No changes needed — this works natively with bridge mode.
+
+## 17. Feature Coverage Audit
+
+Comprehensive audit of all CC features against the stateless design:
+
+### 17.1 Fully Working Features
+
+| Feature | Why It Works |
+|---------|-------------|
+| WebSearch / WebFetch | Preserved via `--tools "WebSearch,WebFetch"`; no executor needed |
+| Skills | FUSE-mounted `.claude/skills/`; CC discovers natively |
+| Auto-Memory | FUSE-mounted MEMORY.md; CC reads/writes natively |
+| CLAUDE.md | FUSE-mounted; full feature support (@include, frontmatter, rules) |
+| Context Compaction | Auto + reactive compaction functional; memory persists via FUSE |
+| Conversation Resume | Bridge SSE replays session history |
+| Multi-Model | Agent tool model override + ConfigTool via FUSE settings |
+| Streaming Output | Bridge SSE to frontend |
+| Cost/Token Tracking | CC reports via bridge; cc-broker extracts from SDK messages |
+| Config Tool | FUSE-mounted settings.json; changes persist via OpenViking |
+| Image/PDF Reading | MCP Read tool must support binary content + base64 encoding |
+| Concurrent Tool Execution | CC runs read-only tools in parallel; MCP server must be thread-safe |
+| System Prompt Customization | Agent definitions via FUSE; `--append-system-prompt` for workspace-level |
+| Permission System | `bypassPermissions` pre-configured in FUSE settings |
+
+### 17.2 Working with Adaptation
+
+| Feature | Adaptation |
+|---------|-----------|
+| AskUserQuestion | Async via IM bridge (Section 16.1) |
+| Plan Mode | Async approval via IM (Section 16.2) |
+| Agent Tool (local) | Works natively; remote isolation unavailable |
+| Edit (no undo) | Works but file checkpointing disabled; no undo |
+| Error Recovery | Session-level via bridge; mid-turn crashes lose in-memory state |
+
+### 17.3 Intentionally Disabled
+
+| Feature | Reason | Impact |
+|---------|--------|--------|
+| LSP | Requires local file indexing; incompatible with FUSE read-only cwd | Code navigation unavailable; CC can still read/grep files via MCP |
+| Worktrees | No local git repo | Git isolation via executor instead |
+| CronCreate (recurring) | Worker exits per turn | Use agentserver-level scheduler for recurring tasks |
+| ScheduleWakeup | Worker exits per turn | External job scheduler instead |
+| File Attribution | No local files to track | Tool calls execute on remote executors |
+| Telemetry | Prevent infrastructure leak | `CLAUDE_CODE_DISABLE_ANALYTICS=1` |
+| Session Transcript | Bridge event log is source of truth | `--no-session-persistence` |
+| RemoteTrigger | Requires OAuth to claude.ai | Not applicable for managed agents |
+| Keychain/OAuth | Managed environment | `ANTHROPIC_API_KEY` env var |
+
+## 18. Known Risks and Mitigations
+
+### 18.1 MCP Tool Naming Collision (Must Validate)
+
+When `--tools "WebSearch,WebFetch"` disables most built-in tools and the MCP server provides tools with the same names as disabled built-ins (Bash, Read, Edit, etc.), CC's internal permission system may still apply deny rules to these names. **This must be validated experimentally before implementation.** If naming conflicts occur, MCP tools should be renamed (e.g., `remote_bash`, `remote_read`) and the Tool Router adjusted accordingly.
+
+### 18.2 Token Security
 
 Executor `tunnel_token` and `registry_token` should be hashed at rest (SHA-256) in the executor-registry database. Raw tokens are returned only once at registration time. sandboxproxy validates tunnel tokens by hashing the presented token and comparing against the stored hash.
 
-### 15.3 Long-Running Tool Calls
+### 18.3 Long-Running Tool Calls
 
 Tool calls like model training may run for extended periods. The sandboxproxy `/api/execute` endpoint supports a configurable timeout per request. For commands expected to run longer than the timeout:
 
@@ -1366,11 +1515,11 @@ Tool calls like model training may run for extended periods. The sandboxproxy `/
 - The Tool Router MCP Server exposes a corresponding `poll_task(executor_id, task_id)` tool for CC to check progress
 - This is a Phase 2 enhancement; Phase 1 uses synchronous execution with a generous default timeout (10 minutes)
 
-### 15.4 Executor List Injection
+### 18.4 Executor List Injection
 
 The `list_executors` tool call costs a turn. As an optimization, the executor list can be injected into the CC system prompt via `--append-system-prompt` so CC always has current executor info without an explicit tool call. This can be implemented in cc-broker when constructing the CC worker startup command.
 
-## 16. Related Work
+## 19. Related Work
 
 - **InfiAgent** (arXiv, Jan 2026): File system as authoritative state record; agents reconstruct context from externalized state snapshots
 - **"Externalization in LLM Agents"** (arXiv, Apr 2026): Unified review of memory/skills/protocols externalization; introduces "harness engineering" concept
