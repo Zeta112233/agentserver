@@ -45,17 +45,21 @@ claude --sdk-url http://cc-broker:8080/v1/sessions/{session_id} \
   ▼
 imbridge ──► agentserver ──► cc-broker ──► sandboxproxy
              (用户业务)  HTTP (推理编排) HTTP (连接/执行)
-                │                           │    │
-                │                        tunnel  HTTP
-                │                           │    │
-                │                           ▼    ▼
-                │                       Local   Sandbox
-                │                       Agent   (K8s/Docker)
-                │                         │
-                │                         │ 注册/心跳
-                │                         ▼
-                │                   executor-registry
-                │                   (executor 生命周期)
+                │               │           │    │
+                │               │        tunnel  HTTP
+                │               │           │    │
+                │               │           ▼    ▼
+                │               │       Local   Sandbox
+                │               │       Agent   (K8s/Docker)
+                │               │         │
+                │               │         │ 注册/心跳
+                │               │         ▼
+                │               │   executor-registry
+                │               │   (executor 生命周期)
+                │               │
+                │               ├──► OpenViking
+                │               │    (FUSE context mount)
+                │               │    CLAUDE.md / Memory / Skills / Settings
                 │
             PostgreSQL
          (共享 event log)
@@ -66,7 +70,7 @@ imbridge ──► agentserver ──► cc-broker ──► sandboxproxy
 | Service | Responsibilities | Does NOT handle |
 |---------|-----------------|-----------------|
 | **agentserver** | User auth, workspace/session CRUD, IM inbound routing, event log persistence, bridge SSE to frontend | CC execution, executor connectivity |
-| **cc-broker** | CC worker management, bridge API (context SSE + event persistence), Tool Router MCP Server, calling sandboxproxy for tool execution | Tunnel management, business logic, executor lifecycle |
+| **cc-broker** | CC worker management, bridge API (context SSE + event persistence), Tool Router MCP Server, calling sandboxproxy for tool execution, OpenViking FUSE mount lifecycle | Tunnel management, business logic, executor lifecycle |
 | **sandboxproxy** | Tunnel management (WebSocket), sandbox HTTP connectivity, unified tool execution API | Business logic, CC reasoning, executor registration |
 | **executor-registry** | Executor registration (OAuth), heartbeat, capability storage, capability probe triggering | Tunnel management, tool execution |
 | **imbridge** | IM platform long-polling (WeChat/Telegram/Matrix), message forwarding to agentserver, outbound replies | Session management, CC execution |
@@ -1039,11 +1043,12 @@ The `agentserver-agent` binary simplifies significantly:
 | Worker management | Per-turn process spawning | CC exits after each turn; `--bare` minimizes cold start; no stale process state |
 | Turn serialization | Per-session lock | Prevents concurrent turn processing race conditions |
 | Permission model | Workspace isolation | Session can only access executors in its own workspace |
-| CLAUDE.md | Inject via system prompt | Read from executor, cache in DB, inject at worker spawn |
-| Memory | Externalize to DB + MCP tools | Workspace-level memory in PostgreSQL, read/write via MCP |
-| Settings/Permissions | Standardized worker config | Pre-authorized MCP tools, no interactive dialogs |
-| Plans | Session events via bridge | Plan content stored as events, replayed on next turn |
-| Side effect isolation | Ephemeral $HOME per worker | All filesystem side effects contained and cleaned up |
+| Side effect management | OpenViking FUSE mount | CC reads/writes files natively; FUSE transparently persists to shared storage |
+| CLAUDE.md | Native discovery via FUSE | Full feature support (@include, frontmatter, rules); synced from executor |
+| Auto-Memory | Native read/write via FUSE | CC manages MEMORY.md natively; OpenViking persists across workers |
+| Settings/Permissions | Pre-configured in OpenViking | bypassPermissions; shared across workers; no interactive dialogs |
+| Skills | Native discovery via FUSE | Mounted at `.claude/skills/`; CC discovers natively |
+| `--bare` flag | Not needed | OpenViking provides full `.claude/` structure; only truly incompatible features disabled via env vars |
 
 ## 12. New Components Summary
 
@@ -1055,9 +1060,8 @@ The `agentserver-agent` binary simplifies significantly:
 | Tool Executor Agent | In sandbox images + agentserver-agent binary | Lightweight HTTP handler for tool execution |
 | IM inbound endpoint | agentserver addition | `POST /api/workspaces/{wid}/im/inbound` |
 | Schema migrations | agentserver DB | `sandbox_id` nullable, `external_id` column, `source` column |
-| Workspace memory table | agentserver DB | `workspace_memory` table for externalized auto-memory |
-| Memory MCP tools | cc-broker Tool Router | `save_memory`, `list_memories`, `delete_memory` |
-| Workspace instructions cache | agentserver DB | `workspace_instructions` for cached CLAUDE.md content |
+| OpenViking integration | cc-broker | FUSE mount/unmount per worker; workspace context tree management |
+| Workspace context in OpenViking | OpenViking | `viking://workspace/{wid}/` tree: claude-home, project, skills, memory |
 
 ## 13. Schema Migrations
 
@@ -1093,298 +1097,205 @@ See Section 8.4 for full schema.
 6. **Phase 6**: Validate `--tools ""` + MCP tool naming experimentally, adjust if needed
 7. **Phase 7**: Deprecate per-agent CC instances, route all reasoning through cc-broker
 
-## 15. Side Effect Management
+## 15. Side Effect Management (via OpenViking FUSE)
 
-CC produces side effects beyond conversation messages and tool calls. In the stateless design, CC workers run in an ephemeral environment with no persistent local filesystem, no git repo, and no user home directory. Every side effect must be either **externalized** (redirected to shared storage), **injected** (loaded from shared storage at startup), or **disabled**.
+CC produces side effects beyond conversation messages and tool calls: CLAUDE.md discovery, auto-memory read/write, settings, skills, plans, session transcripts, etc. In the stateless design, CC workers have no persistent local filesystem.
 
-### 15.1 Side Effect Classification
+**Solution**: Use [OpenViking](https://github.com/nicholasgasior/openviking) as the context layer. OpenViking provides a FUSE filesystem that maps `viking://` URIs to pluggable storage backends (S3, KV, SQLite). By FUSE-mounting OpenViking at CC's `$HOME/.claude/` and `cwd`, CC reads and writes files normally while OpenViking transparently persists them to shared storage.
 
-| Side Effect | Strategy | Details |
-|-------------|----------|---------|
-| CLAUDE.md (project instructions) | **Inject** | Load from executor, inject via system prompt |
-| Settings (permissions) | **Inject** | Standardized worker config, pre-authorized permissions |
-| Auto-Memory / MEMORY.md | **Externalize** | Store in DB per workspace, inject via system prompt |
-| Plan mode | **Externalize** | Store plan content as session events in bridge |
-| Session transcript | **Disable** | Bridge event log is the single source of truth |
-| Skills/Plugins | **Disable** | `--bare` disables plugin sync + skill discovery |
-| Cron/Scheduled tasks | **Disable** | Not compatible with stateless workers |
-| Worktrees | **Disable** | No local repo on CC worker |
-| Git internal operations | **Disable** | Will fail gracefully (no repo); all git via tool calls to executors |
-| Telemetry | **Disable** | `CLAUDE_CODE_DISABLE_ANALYTICS=1` |
-| LSP | **Disable** | `--bare` disables LSP |
-| File attribution/backups | **Disable** | `--bare` disables attribution |
-| User hooks | **Disable** | `--bare` disables user hooks |
-| Keychain/OAuth | **Disable** | `--bare` skips; use `ANTHROPIC_API_KEY` env var |
-| MCP auth cache | **Isolate** | Ephemeral `$HOME` per worker |
-
-### 15.2 CLAUDE.md — Project Instructions Injection
-
-**Problem**: CC discovers CLAUDE.md by walking up from the working directory. Stateless CC workers have no project directory.
-
-**Solution**: Load CLAUDE.md content from the primary executor at session start, store in DB, inject into CC via `--append-system-prompt`.
+### 15.1 Architecture
 
 ```
-Session start (first message for a workspace)
+CC Worker process
   │
-  ├─ 1. cc-broker identifies the workspace's primary executor(s)
-  ├─ 2. Reads CLAUDE.md from executor via Tool Router:
-  │     Read(executor_id="agt_dev", file_path="CLAUDE.md")
-  │     Read(executor_id="agt_dev", file_path=".claude/CLAUDE.md")
-  │     Read(executor_id="agt_dev", file_path=".claude/rules/*.md")
-  ├─ 3. Caches content in workspace metadata (DB)
-  └─ 4. On each CC worker spawn, injects via --append-system-prompt
+  │  normal file I/O (CC is unaware of FUSE)
+  ▼
+FUSE mount (OpenViking)
+  ├── $HOME/.claude/              ← viking://workspace/{wid}/claude-home/
+  │   ├── settings.json           ← bypassPermissions, pre-configured
+  │   ├── CLAUDE.md               ← workspace-level instructions
+  │   ├── projects/{hash}/
+  │   │   └── memory/
+  │   │       └── MEMORY.md       ← CC auto-memory (read/write, persisted)
+  │   └── skills/                 ← user-level skills
+  │
+  └── {cwd}/                      ← viking://workspace/{wid}/project/
+      ├── CLAUDE.md               ← project-level instructions (synced from executor)
+      ├── CLAUDE.local.md         ← local instructions
+      └── .claude/
+          ├── CLAUDE.md           ← alternative project instructions
+          ├── rules/*.md          ← project rules
+          ├── settings.json       ← project-level settings
+          └── skills/             ← project-level skills
+  │
+  ▼
+OpenViking Service
+  │
+  ▼
+Storage Backend (S3 / KV / SQLite)
 ```
 
+### 15.2 Why OpenViking
+
+| Approach | Problem |
+|----------|---------|
+| `--append-system-prompt` injection | Loses CLAUDE.md features (@include, frontmatter, rules) |
+| DB + MCP tools for memory | CC can't use native auto-memory; adds complexity |
+| Physical shared filesystem (NFS/PVC) | Infrastructure dependency; not cloud-native |
+| Ephemeral `$HOME` with no persistence | Memory, settings, plans all lost on worker exit |
+| **OpenViking FUSE mount** | **CC fully unaware; all native features work; storage is pluggable** |
+
+### 15.3 Side Effect Classification
+
+| Side Effect | Strategy | How OpenViking Handles It |
+|-------------|----------|---------------------------|
+| CLAUDE.md | **Native discovery** | Mounted at `{cwd}/CLAUDE.md` and `$HOME/.claude/CLAUDE.md`; CC discovers natively with full feature support |
+| Auto-Memory | **Native read/write** | CC writes to `$HOME/.claude/projects/{hash}/memory/MEMORY.md`; FUSE persists to OpenViking backend |
+| Settings | **Pre-configured** | `settings.json` with `bypassPermissions` served from OpenViking; shared across workers |
+| Skills | **Native discovery** | Mounted at `{cwd}/.claude/skills/`; CC discovers and loads natively |
+| Plans | **Native read/write** | CC writes to `$HOME/.claude/plans/`; FUSE persists to OpenViking |
+| Session transcript | **Disable** | `--no-session-persistence`; bridge event log is source of truth |
+| Cron/Scheduled tasks | **Disable** | Incompatible with stateless; not meaningful in per-turn workers |
+| Worktrees | **Disable** | No local git repo; not exposed in MCP tool set |
+| Git internal ops | **Graceful fail** | No repo in cwd; all git goes through tool calls to executors |
+| Telemetry | **Disable** | `CLAUDE_CODE_DISABLE_ANALYTICS=1` |
+| File attribution | **Disable** | `CLAUDE_CODE_DISABLE_FILE_CHECKPOINTING=1` |
+| Keychain/OAuth | **Skip** | `ANTHROPIC_API_KEY` env var only |
+
+### 15.4 OpenViking Workspace Layout
+
+Each workspace has a persistent context tree in OpenViking:
+
+```
+viking://workspace/{workspace_id}/
+  ├── claude-home/                    # → mounted as $HOME/.claude/
+  │   ├── settings.json               # bypassPermissions + workspace config
+  │   ├── CLAUDE.md                   # workspace-level global instructions
+  │   ├── rules/                      # workspace-level rules
+  │   │   └── *.md
+  │   ├── skills/                     # workspace-level skills
+  │   │   └── {skill-name}/
+  │   │       └── skill.md
+  │   └── projects/
+  │       └── {hash}/
+  │           └── memory/
+  │               ├── MEMORY.md       # auto-memory index (CC reads/writes)
+  │               └── *.md            # memory entries
+  │
+  └── project/                        # → mounted as CC's cwd
+      ├── CLAUDE.md                   # project instructions (synced from executor)
+      ├── CLAUDE.local.md
+      └── .claude/
+          ├── CLAUDE.md
+          ├── rules/*.md
+          ├── settings.json           # project-level settings
+          └── skills/
+              └── {skill-name}/
+                  └── skill.md
+```
+
+### 15.5 Project Instructions Sync
+
+CLAUDE.md and project rules are synced from executors to OpenViking. This happens:
+- On workspace creation
+- On executor capability probe (Section 8.3)
+- On explicit user request (refresh)
+- Periodically (configurable, e.g., hourly)
+
 ```go
-func (b *CCBroker) spawnWorker(ctx context.Context, sessionID, workspaceID string) (*CCWorker, error) {
-    // Load cached CLAUDE.md for this workspace
-    claudeMD, _ := b.db.GetWorkspaceInstructions(ctx, workspaceID)
+func (b *CCBroker) syncProjectInstructions(ctx context.Context, workspaceID, executorID string) error {
+    // Read CLAUDE.md from executor via sandboxproxy
+    claudeMD, _ := b.sandboxProxy.Execute(ctx, ExecuteRequest{
+        ExecutorID: executorID,
+        Tool:       "Read",
+        Arguments:  json.RawMessage(`{"file_path":"CLAUDE.md"}`),
+    })
 
-    args := []string{
-        "--sdk-url", bridgeURL,
-        "--tools", "",
-        "--mcp-config", mcpConfigPath,
-        "--bare",
-    }
-    if claudeMD != "" {
-        args = append(args, "--append-system-prompt", claudeMD)
-    }
+    // Write to OpenViking
+    b.viking.Write(ctx, fmt.Sprintf("viking://workspace/%s/project/CLAUDE.md", workspaceID),
+        claudeMD.Output)
 
-    cmd := exec.CommandContext(ctx, "claude", args...)
+    // Also sync .claude/rules/*.md, .claude/CLAUDE.md, etc.
     // ...
+    return nil
 }
 ```
 
-**Refresh**: Workspace instructions are re-read from executor on explicit user request or periodically (e.g., once per hour). A `refresh_instructions` MCP tool can be exposed to let CC trigger a refresh.
+### 15.6 Settings Configuration
 
-### 15.3 Settings — Standardized Worker Configuration
-
-**Problem**: CC reads settings.json for permissions, model preferences, etc. CC workers don't share a settings file, and any permission grants are lost on worker exit.
-
-**Solution**: cc-broker generates a standardized settings file for all workers with pre-authorized permissions for MCP tools:
-
-```go
-func (b *CCBroker) buildWorkerSettings() string {
-    settings := map[string]interface{}{
-        // Pre-authorize all MCP tools (no interactive permission dialogs)
-        "permissions": map[string]interface{}{
-            "allow": []string{
-                "mcp__tool-router__*",  // all Tool Router MCP tools
-            },
-        },
-        // Disable features incompatible with stateless mode
-        "cron":          map[string]bool{"enabled": false},
-        "memory":        map[string]bool{"enabled": false},  // handled separately
-        "fileCheckpointing": false,
-    }
-    path := writeTempFile(settings)
-    return path
-}
-```
-
-CC worker startup includes:
-```bash
-claude --sdk-url ... --tools "" --bare --settings /tmp/worker-settings.json ...
-```
-
-### 15.4 Auto-Memory — Externalized to DB
-
-**Problem**: CC's auto-memory writes MEMORY.md files to `~/.claude/MEMORY/`. In stateless mode, these are lost on worker exit and not shared across sessions in the same workspace.
-
-**Solution**: Externalize memory to workspace-level storage in PostgreSQL.
-
-**Schema**:
-```sql
-workspace_memory (
-    id            BIGSERIAL PRIMARY KEY,
-    workspace_id  TEXT NOT NULL,
-    name          TEXT NOT NULL,         -- memory entry name
-    description   TEXT,                  -- one-line description
-    type          TEXT,                  -- 'user' | 'feedback' | 'project' | 'reference'
-    content       TEXT NOT NULL,         -- memory content (markdown)
-    created_at    TIMESTAMPTZ,
-    updated_at    TIMESTAMPTZ,
-    UNIQUE(workspace_id, name)
-)
-```
-
-**Read path**: At CC worker spawn, load workspace memories from DB and inject via `--append-system-prompt`:
-
-```go
-func (b *CCBroker) loadWorkspaceMemory(ctx context.Context, workspaceID string) string {
-    memories, _ := b.db.ListWorkspaceMemories(ctx, workspaceID)
-    if len(memories) == 0 {
-        return ""
-    }
-    var sb strings.Builder
-    sb.WriteString("\n# Workspace Memory\n")
-    for _, m := range memories {
-        sb.WriteString(fmt.Sprintf("\n## %s (%s)\n%s\n", m.Name, m.Type, m.Content))
-    }
-    return sb.String()
-}
-```
-
-**Write path**: Expose MCP tools for CC to manage memory:
+The `settings.json` in OpenViking is pre-configured per workspace:
 
 ```json
-[
-  {
-    "name": "save_memory",
-    "description": "Save a memory entry for this workspace. Persists across sessions.",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "name": {"type": "string"},
-        "type": {"type": "string", "enum": ["user", "feedback", "project", "reference"]},
-        "description": {"type": "string"},
-        "content": {"type": "string"}
-      },
-      "required": ["name", "type", "content"]
-    }
+{
+  "permissions": {
+    "allow": ["mcp__tool-router__*"],
+    "mode": "bypassPermissions"
   },
-  {
-    "name": "list_memories",
-    "description": "List all saved memories for this workspace."
-  },
-  {
-    "name": "delete_memory",
-    "description": "Delete a memory entry by name.",
-    "inputSchema": {
-      "type": "object",
-      "properties": {"name": {"type": "string"}},
-      "required": ["name"]
-    }
+  "env": {
+    "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "165000",
+    "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "0"
   }
-]
-```
-
-Tool Router routes these to cc-broker's own API (not to an executor).
-
-### 15.5 Plan Mode — Externalized to Session Events
-
-**Problem**: CC writes plan files to `~/.claude/plans/`. Lost on worker exit.
-
-**Solution**: In bridge mode, CC's plan content is captured as session events. The bridge API already handles plan-related messages. When CC creates or updates a plan:
-
-1. CC writes the plan as a session event (via bridge batch endpoint)
-2. cc-broker stores it in `agent_session_events` with `event_type = 'plan'`
-3. On next turn, the plan is replayed via bridge SSE — CC restores plan state
-
-Additionally, cc-broker can store the latest plan content as session metadata for quick access:
-
-```sql
-ALTER TABLE agent_sessions ADD COLUMN plan_content TEXT;
-```
-
-### 15.6 Session Transcript — Disabled (Bridge is Source of Truth)
-
-**Problem**: CC writes JSONL transcript to `~/.claude/projects/`. This duplicates the bridge event log.
-
-**Solution**: Use `--no-session-persistence` flag to disable local transcript writing. The bridge event log (`agent_session_events`) is the single source of truth.
-
-Already included in worker startup args.
-
-### 15.7 Cron/Scheduled Tasks — Disabled
-
-**Problem**: CC writes to `.claude/scheduled_tasks.json`. Meaningless in stateless mode — worker exits after each turn.
-
-**Solution**: Disable by:
-1. Worker settings: `"cron": {"enabled": false}`
-2. Not exposing CronCreate/CronDelete in MCP tool set
-
-If recurring tasks are needed in the future, they should be implemented at the agentserver level (which is already long-lived), not in CC.
-
-### 15.8 Worktrees and Git Internal Operations — Disabled
-
-**Problem**: CC does internal git operations (worktree creation, branch detection, gitignore writes) that assume a local git repo. CC workers have no repo.
-
-**Solution**: These operations will fail gracefully in `--bare` mode (no git repo in cwd). All git operations should go through tool calls to executors, where the actual repos live.
-
-The `EnterWorktree` and `ExitWorktree` tools are not exposed in our MCP tool set, so CC cannot attempt worktree operations.
-
-### 15.9 Telemetry — Disabled
-
-**Solution**: Set `CLAUDE_CODE_DISABLE_ANALYTICS=1` in CC worker environment to prevent telemetry from leaking infrastructure details.
-
-### 15.10 Worker Isolation — Ephemeral HOME
-
-Each CC worker runs with an isolated ephemeral `$HOME` to prevent any filesystem side effects from leaking between workers:
-
-```go
-func (b *CCBroker) spawnWorker(ctx context.Context, ...) (*CCWorker, error) {
-    // Create ephemeral home directory
-    homeDir, _ := os.MkdirTemp("", fmt.Sprintf("cc-worker-%s-", sessionID))
-
-    cmd := exec.CommandContext(ctx, "claude", args...)
-    cmd.Env = append(os.Environ(),
-        "HOME="+homeDir,
-        "ANTHROPIC_API_KEY="+b.apiKey,
-        "CLAUDE_CODE_SIMPLE=1",
-        "CLAUDE_CODE_DISABLE_ANALYTICS=1",
-    )
-    // Cleanup homeDir after worker exits
-    go func() {
-        cmd.Wait()
-        os.RemoveAll(homeDir)
-    }()
-    // ...
 }
 ```
 
-This ensures:
-- MCP auth cache (`~/.claude/mcp-needs-auth-cache.json`) is isolated
-- Any accidental file writes are contained
-- No state leaks between workers
+Key settings:
+- `bypassPermissions`: No interactive permission dialogs
+- `CLAUDE_CODE_AUTO_COMPACT_WINDOW=165000`: Auto-compaction threshold (from nanoclaw's production config)
+- `CLAUDE_CODE_DISABLE_AUTO_MEMORY=0`: Auto-memory **enabled** — CC natively manages MEMORY.md
 
-### 15.11 Complete CC Worker Startup
-
-Combining all side effect mitigations, the full CC worker startup:
+### 15.7 Worker FUSE Mount Lifecycle
 
 ```go
 func (b *CCBroker) spawnWorker(ctx context.Context, sessionID, workspaceID string) (*CCWorker, error) {
-    homeDir, _ := os.MkdirTemp("", "cc-worker-")
+    // 1. Create ephemeral mount points
+    mountBase, _ := os.MkdirTemp("", "cc-worker-")
+    homeDir := filepath.Join(mountBase, "home")
+    projectDir := filepath.Join(mountBase, "project")
+    claudeDir := filepath.Join(homeDir, ".claude")
+    os.MkdirAll(claudeDir, 0755)
+    os.MkdirAll(projectDir, 0755)
+
+    // 2. FUSE mount OpenViking at both paths
+    homeMountID, _ := b.viking.Mount(ctx, MountConfig{
+        MountPoint: claudeDir,
+        Scope:      fmt.Sprintf("viking://workspace/%s/claude-home/", workspaceID),
+        ReadOnly:   false,  // CC needs to write auto-memory
+    })
+    projectMountID, _ := b.viking.Mount(ctx, MountConfig{
+        MountPoint: projectDir,
+        Scope:      fmt.Sprintf("viking://workspace/%s/project/", workspaceID),
+        ReadOnly:   true,   // project instructions are read-only for CC
+    })
+
+    // 3. Spawn CC worker
     bridgeURL := fmt.Sprintf("http://localhost:%d/v1/sessions/%s", b.bridgePort, sessionID)
-    mcpConfig := b.buildMCPConfig(sessionID, workspaceID)
-    mcpConfigPath := writeTempFile(mcpConfig)
-    settingsPath := b.buildWorkerSettings()
+    mcpConfigPath := b.writeMCPConfig(sessionID, workspaceID)
 
-    // Load workspace context for system prompt injection
-    claudeMD, _ := b.db.GetWorkspaceInstructions(ctx, workspaceID)
-    memory, _ := b.loadWorkspaceMemory(ctx, workspaceID)
-    executorList, _ := b.formatExecutorList(ctx, workspaceID)
-    systemPromptExtra := claudeMD + "\n" + memory + "\n" + executorList
-
-    args := []string{
+    cmd := exec.CommandContext(ctx, "claude",
         "--sdk-url", bridgeURL,
         "--tools", "",
         "--mcp-config", mcpConfigPath,
-        "--settings", settingsPath,
-        "--bare",
         "--no-session-persistence",
-    }
-    if systemPromptExtra != "" {
-        args = append(args, "--append-system-prompt", systemPromptExtra)
-    }
-
-    cmd := exec.CommandContext(ctx, "claude", args...)
-    cmd.Dir = homeDir  // cwd = ephemeral home (no project dir)
+    )
+    cmd.Dir = projectDir
     cmd.Env = []string{
         "HOME=" + homeDir,
         "ANTHROPIC_API_KEY=" + b.apiKey,
-        "CLAUDE_CODE_SIMPLE=1",
         "CLAUDE_CODE_DISABLE_ANALYTICS=1",
         "CLAUDE_CODE_DISABLE_FILE_CHECKPOINTING=1",
+        "CLAUDE_CODE_AUTO_COMPACT_WINDOW=165000",
         "PATH=" + os.Getenv("PATH"),
         "TERM=xterm-256color",
     }
     cmd.Start()
 
+    // 4. Cleanup on exit: unmount FUSE, remove temp dirs
     go func() {
         cmd.Wait()
-        os.RemoveAll(homeDir)
+        b.viking.Unmount(ctx, homeMountID)
+        b.viking.Unmount(ctx, projectMountID)
+        os.RemoveAll(mountBase)
         os.Remove(mcpConfigPath)
-        os.Remove(settingsPath)
     }()
 
     return &CCWorker{
@@ -1396,6 +1307,32 @@ func (b *CCBroker) spawnWorker(ctx context.Context, sessionID, workspaceID strin
     }, nil
 }
 ```
+
+Note: `--bare` flag is **no longer needed**. With OpenViking providing the full `.claude/` directory structure, CC's native features (skills, auto-memory, CLAUDE.md discovery) work correctly. Only features truly incompatible with stateless mode are disabled via env vars.
+
+### 15.8 Features Preserved (vs. Previous Design)
+
+| Feature | Previous Design (ephemeral $HOME) | New Design (OpenViking FUSE) |
+|---------|----------------------------------|------------------------------|
+| CLAUDE.md | Injected via `--append-system-prompt` (loses @include, frontmatter, rules) | Native discovery (full feature support) |
+| Auto-Memory | Disabled; externalized to DB + MCP tools | Enabled; CC reads/writes MEMORY.md natively; FUSE persists |
+| Skills | Disabled via `--bare` | Enabled; CC discovers from `.claude/skills/` |
+| Settings | Generated temp file | Persistent in OpenViking; shared across workers |
+| Plans | Stored as session events only | CC writes to `$HOME/.claude/plans/`; persisted via FUSE |
+| `--bare` flag | Required | Not needed; all native features work |
+
+### 15.9 Remaining Disabled Features
+
+These are disabled via env vars because they are **structurally incompatible** with stateless per-turn workers, not because of filesystem concerns:
+
+| Feature | Reason | Mechanism |
+|---------|--------|-----------|
+| Session transcript | Bridge event log is source of truth; local JSONL is redundant | `--no-session-persistence` |
+| File attribution | No local files to track; tool calls execute on remote executors | `CLAUDE_CODE_DISABLE_FILE_CHECKPOINTING=1` |
+| Telemetry | May leak infrastructure details | `CLAUDE_CODE_DISABLE_ANALYTICS=1` |
+| Cron/Scheduled tasks | Worker exits after each turn; meaningless | Not exposed in MCP tool set |
+| Worktrees | No local git repo | Not exposed in MCP tool set |
+| Keychain/OAuth | Managed environment; API key via env var | `ANTHROPIC_API_KEY` env var |
 
 ## 16. Known Risks and Mitigations
 
