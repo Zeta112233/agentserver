@@ -99,6 +99,9 @@ services:
       CCBROKER_LOG_LEVEL: "info"
       CCBROKER_EXECUTOR_REGISTRY_URL: "http://executor-registry:8084"
       CCBROKER_AGENTSERVER_URL: "http://server:8080"
+      CCBROKER_OPENVIKING_URL: "http://openviking:1933"
+      CCBROKER_OPENVIKING_API_KEY: ""
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"
     ports:
       - "8085:8085"
     depends_on:
