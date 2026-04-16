@@ -80,6 +80,11 @@ func diffSnapshot(dir string, old map[string]fileInfo) []fileChange {
 // SpawnWorker sets up a temporary workspace, downloads files from OpenViking,
 // starts an MCP server, and launches a Claude Code worker process.
 func (s *Server) SpawnWorker(ctx context.Context, sessionID, workspaceID string) (*CCWorker, error) {
+	apiKey := os.Getenv("ANTHROPIC_API_KEY")
+	if apiKey == "" {
+		return nil, fmt.Errorf("ANTHROPIC_API_KEY environment variable is not set")
+	}
+
 	// 1. Create temp dir structure.
 	tempDir, err := os.MkdirTemp("", "cc-worker-")
 	if err != nil {
@@ -142,7 +147,7 @@ func (s *Server) SpawnWorker(ctx context.Context, sessionID, workspaceID string)
 		return nil, fmt.Errorf("marshal MCP config: %w", err)
 	}
 	mcpConfigPath := filepath.Join(tempDir, "mcp-config.json")
-	if err := os.WriteFile(mcpConfigPath, mcpConfigBytes, 0644); err != nil {
+	if err := os.WriteFile(mcpConfigPath, mcpConfigBytes, 0600); err != nil {
 		mcpCloser()
 		os.RemoveAll(tempDir)
 		return nil, fmt.Errorf("write MCP config: %w", err)
@@ -150,7 +155,7 @@ func (s *Server) SpawnWorker(ctx context.Context, sessionID, workspaceID string)
 
 	// 7. Build Claude Code command.
 	sdkURL := fmt.Sprintf("http://127.0.0.1:%s/v1/sessions/%s", s.config.Port, sessionID)
-	cmd := exec.CommandContext(ctx, "claude",
+	cmd := exec.Command("claude",
 		"--print",
 		"--sdk-url", sdkURL,
 		"--tools", "WebSearch,WebFetch",
@@ -167,7 +172,7 @@ func (s *Server) SpawnWorker(ctx context.Context, sessionID, workspaceID string)
 	cmd.Env = []string{
 		"CLAUDE_CONFIG_DIR=" + claudeDir,
 		"CLAUDE_COWORK_MEMORY_PATH_OVERRIDE=" + memoryDir,
-		"ANTHROPIC_API_KEY=" + os.Getenv("ANTHROPIC_API_KEY"),
+		"ANTHROPIC_API_KEY=" + apiKey,
 		"CLAUDE_CODE_DISABLE_FILE_CHECKPOINTING=1",
 		"CLAUDE_CODE_AUTO_COMPACT_WINDOW=165000",
 		"HOME=" + tempDir,

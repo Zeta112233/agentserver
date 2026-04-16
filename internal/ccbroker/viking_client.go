@@ -81,6 +81,7 @@ func (v *VikingClient) DownloadTree(ctx context.Context, vikingURI, localDir str
 	}
 
 	// 2. Create directories and download files
+	var errCount int
 	for _, entry := range entries {
 		localPath := filepath.Join(localDir, entry.RelPath)
 		if entry.IsDir {
@@ -92,21 +93,41 @@ func (v *VikingClient) DownloadTree(ctx context.Context, vikingURI, localDir str
 		readURL := fmt.Sprintf("/api/v1/content/read?uri=%s", url.QueryEscape(entry.URI))
 		fresp, err := v.doRequest(ctx, "GET", readURL, nil, "")
 		if err != nil {
-			continue // skip failed files
+			errCount++
+			continue
+		}
+
+		if fresp.StatusCode != 200 {
+			fresp.Body.Close()
+			errCount++
+			continue
 		}
 
 		var fvresp vikingResponse
-		json.NewDecoder(fresp.Body).Decode(&fvresp)
+		if err := json.NewDecoder(fresp.Body).Decode(&fvresp); err != nil {
+			fresp.Body.Close()
+			errCount++
+			continue
+		}
 		fresp.Body.Close()
 
 		// Result is the file content as a JSON string
 		var content string
-		json.Unmarshal(fvresp.Result, &content)
+		if err := json.Unmarshal(fvresp.Result, &content); err != nil {
+			errCount++
+			continue
+		}
 
 		os.MkdirAll(filepath.Dir(localPath), 0755)
-		os.WriteFile(localPath, []byte(content), 0644)
+		if err := os.WriteFile(localPath, []byte(content), 0644); err != nil {
+			errCount++
+			continue
+		}
 	}
 
+	if errCount > 0 {
+		return fmt.Errorf("failed to download %d files", errCount)
+	}
 	return nil
 }
 
@@ -147,6 +168,11 @@ func (v *VikingClient) CreateFile(ctx context.Context, vikingURI string, content
 		return fmt.Errorf("temp upload: %w", err)
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("temp upload failed (status %d): %s", resp.StatusCode, body)
+	}
 
 	var uploadResp vikingResponse
 	json.NewDecoder(resp.Body).Decode(&uploadResp)

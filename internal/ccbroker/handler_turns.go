@@ -83,17 +83,19 @@ func (s *Server) handleProcessTurn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check flusher BEFORE setting SSE headers.
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "streaming not supported")
+		go s.CleanupWorker(context.Background(), worker)
+		return
+	}
+
 	// Set SSE response headers.
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
-
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "streaming not supported", http.StatusInternalServerError)
-		return
-	}
 
 	// Subscribe to session SSE events.
 	sub := s.sse.Subscribe(req.SessionID)

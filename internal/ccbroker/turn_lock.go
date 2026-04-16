@@ -24,8 +24,9 @@ func (t *TurnLock) Acquire(sessionID string) {
 
 func (t *TurnLock) Release(sessionID string) {
 	t.mu.Lock()
-	if ch, exists := t.locks[sessionID]; exists {
+	ch, exists := t.locks[sessionID]
+	t.mu.Unlock()
+	if exists {
 		<-ch
 	}
-	t.mu.Unlock()
 }
