@@ -88,7 +88,7 @@ imbridge ──► agentserver ──► cc-broker ─────────�
 | **cc-broker** | CC worker management, bridge API (context SSE + event persistence), Tool Router MCP Server, calling sandboxproxy for tool execution, OpenViking download/upload for workspace context | Tunnel management, business logic, executor lifecycle |
 | **sandboxproxy** | Tunnel management (WebSocket), sandbox HTTP connectivity, unified tool execution API | Business logic, CC reasoning, executor registration |
 | **executor-registry** | Executor registration (OAuth), heartbeat, capability storage, capability probe triggering | Tunnel management, tool execution |
-| **OpenViking** | Persistent context storage (CLAUDE.md, Memory, Settings, Skills); serves FUSE client requests via HTTP; pluggable storage backend (S3/KV/SQLite) | CC execution, business logic |
+| **OpenViking** | Persistent context storage (CLAUDE.md, Memory, Settings, Skills); REST API for download/upload; pluggable storage backend (S3/KV/SQLite) | CC execution, business logic |
 | **imbridge** | IM platform long-polling (WeChat/Telegram/Matrix), message forwarding to agentserver, outbound replies | Session management, CC execution |
 
 ### 2.3 Inter-Service Communication
@@ -516,7 +516,7 @@ func (r *ToolRouter) HandleToolCall(ctx context.Context, req MCPToolCallRequest)
 }
 ```
 
-### 5.4 Example CC Usage Flow
+### 5.5 Example CC Usage Flow
 
 ```
 User: "帮我把 dev 机器上的代码部署到测试环境"
@@ -579,68 +579,11 @@ type CCWorker struct {
 }
 ```
 
-### 6.4 Worker Startup
+### 6.4 Worker Startup and Request Processing
 
-```go
-func (b *CCBroker) spawnWorker(ctx context.Context, sessionID, workspaceID string) (*CCWorker, error) {
-    // Generate dynamic MCP config with session_id for permission scoping
-    mcpConfig := b.buildMCPConfig(sessionID, workspaceID)
-    mcpConfigPath := writeTempMCPConfig(mcpConfig)
+See **Section 15.7 (Worker Lifecycle)** for the complete `spawnWorker()` implementation, including OpenViking download/upload, env vars, CLI flags, and cleanup logic.
 
-    bridgeURL := fmt.Sprintf("http://localhost:%d/v1/sessions/%s", b.bridgePort, sessionID)
-
-    cmd := exec.CommandContext(ctx, "claude",
-        "--sdk-url", bridgeURL,           // connect to cc-broker's bridge
-        "--tools", "WebSearch,WebFetch",                     // disable all built-in tools
-        "--mcp-config", mcpConfigPath,     // Tool Router MCP Server
-        "--bare",                          // minimal init
-    )
-    cmd.Env = append(os.Environ(),
-        "ANTHROPIC_API_KEY="+b.apiKey,
-        "CLAUDE_CODE_SIMPLE=1",
-    )
-    cmd.Start()
-
-    return &CCWorker{
-        ID:        uuid.New().String(),
-        Process:   cmd,
-        SessionID: sessionID,
-        Status:    WorkerStatusStarting,
-    }, nil
-}
-```
-
-### 6.5 Request Processing
-
-```go
-func (b *CCBroker) HandleTurn(ctx context.Context, req ProcessTurnRequest) (<-chan TurnEvent, error) {
-    // 1. Inject user message into session event log
-    //    (CC will pick it up via bridge SSE replay)
-    b.db.InsertSessionEvent(ctx, req.SessionID, UserMessageEvent(req.UserMessage))
-
-    // 2. Spawn CC worker connected to this session's bridge
-    worker, err := b.spawnWorker(ctx, req.SessionID, req.WorkspaceID)
-    if err != nil {
-        return nil, err
-    }
-
-    // 3. Stream events as CC writes them back via bridge batch endpoint
-    //    cc-broker's bridge handler captures these and forwards to the output channel
-    events := b.bridge.Subscribe(req.SessionID)
-
-    go func() {
-        // Wait for CC process to exit
-        worker.Process.Wait()
-        worker.Status = WorkerStatusDone
-        // Cleanup
-        close(events)
-    }()
-
-    return events, nil
-}
-```
-
-### 6.6 Per-Session Turn Serialization
+### 6.5 Per-Session Turn Serialization
 
 To prevent race conditions when a user sends multiple messages rapidly (common in WeChat), cc-broker enforces **one active turn per session**:
 
@@ -680,7 +623,7 @@ func (b *CCBroker) HandleTurn(ctx context.Context, req ProcessTurnRequest) (<-ch
 }
 ```
 
-### 6.7 Health Management
+### 6.6 Health Management
 
 ```go
 func (b *CCBroker) healthLoop() {
@@ -704,7 +647,7 @@ func (b *CCBroker) healthLoop() {
 }
 ```
 
-### 6.8 Horizontal Scaling
+### 6.7 Horizontal Scaling
 
 Each cc-broker instance spawns CC workers on demand. Requests can be routed to any cc-broker instance since all state is in PostgreSQL:
 
@@ -1112,6 +1055,10 @@ The existing schema requires `sandbox_id NOT NULL`. In the new architecture, IM-
 
 ```sql
 -- Migration: make sandbox_id nullable
+-- Note: The existing FK constraint (REFERENCES sandboxes(id) ON DELETE CASCADE)
+-- naturally supports nullable FK columns in PostgreSQL — NULL values skip the FK check.
+-- Existing rows with non-null sandbox_id continue to have referential integrity.
+-- Sessions with NULL sandbox_id (stateless CC) are not cascade-deleted when sandboxes are removed.
 ALTER TABLE agent_sessions ALTER COLUMN sandbox_id DROP NOT NULL;
 
 -- Add external_id for IM session resolution (chat_jid → session mapping)
@@ -1124,19 +1071,33 @@ ALTER TABLE agent_sessions ADD COLUMN source TEXT DEFAULT 'agent';
 -- source values: 'agent' (legacy), 'weixin', 'telegram', 'matrix', 'web', 'api'
 ```
 
+**Go code changes required:**
+- `AgentSession.SandboxID` type must change from `string` to `*string` (or `sql.NullString`) in `internal/db/agent_sessions.go`
+- `CreateAgentSession` must accept optional `sandboxID`
+- Bridge `HandleCreateSession` must relax the `sandbox_id required` validation for cc-broker sessions
+- Bridge `HandleBridge` auth must support workspace-based auth (not just sandbox-based) for sandbox-less sessions
+
 ### 13.2 Executor Tables (in executor-registry DB)
 
 See Section 8.4 for full schema.
 
 ## 14. Migration Path
 
-1. **Phase 1**: Schema migrations (sandbox_id nullable, external_id, executor tables, scheduled_tasks)
-2. **Phase 2**: Build executor-registry + sandboxproxy as standalone services
-3. **Phase 3**: Build cc-broker with bridge API, Tool Router MCP Server (with `remote_` prefixed tools), OpenViking download/upload integration, and worker management
-4. **Phase 4**: Add IM inbound endpoint to agentserver, rewire imbridge, add scheduled task service
-5. **Phase 5**: Modify agentserver-agent to register with executor-registry and connect tunnel to sandboxproxy
-6. **Phase 6**: Integration testing — validate CC with `--sdk-url` + `--tools "WebSearch,WebFetch"` + MCP end-to-end
-7. **Phase 7**: Deprecate per-agent CC instances, route all reasoning through cc-broker
+**Key principle: existing NanoClaw-based agents and stateless CC coexist during migration.** No big-bang switchover — each phase is independently deployable and backward-compatible.
+
+1. **Phase 1**: Schema migrations (sandbox_id nullable, external_id, executor tables, scheduled_tasks). Go code updates for nullable SandboxID. **Backward-compatible**: existing code continues working with non-null sandbox_id rows.
+
+2. **Phase 2**: Build executor-registry + sandboxproxy as standalone services. **No impact on existing**: these are new services with no existing dependencies.
+
+3. **Phase 3**: Build cc-broker with bridge API, Tool Router MCP Server (with `remote_` prefixed tools), OpenViking download/upload integration, and worker management. **No impact on existing**: cc-broker is a new service.
+
+4. **Phase 4**: Add IM inbound endpoint to agentserver (`POST /api/workspaces/{wid}/im/inbound`). **Incremental imbridge routing**: add a per-channel flag (`routing_mode: "nanoclaw" | "stateless"`) to `workspace_im_channels` table. Channels with `routing_mode="nanoclaw"` continue forwarding to NanoClaw pods via existing `forwardToNanoClaw`. New channels or migrated channels use `routing_mode="stateless"` to forward to agentserver's inbound endpoint. Both paths coexist.
+
+5. **Phase 5**: Modify agentserver-agent to register with executor-registry and connect tunnel to sandboxproxy. **Dual-registration transition**: during migration, agents register with BOTH agentserver (legacy) and executor-registry (new). Tunnel connects to sandboxproxy while legacy HTTP proxy remains functional. Once all traffic is confirmed on sandboxproxy, remove legacy tunnel endpoint from agentserver.
+
+6. **Phase 6**: Integration testing — validate CC with `--sdk-url` + `--tools "WebSearch,WebFetch"` + MCP end-to-end.
+
+7. **Phase 7**: Deprecate per-agent CC instances, route all reasoning through cc-broker. Remove legacy NanoClaw forwarding from imbridge. Remove legacy tunnel endpoint from agentserver.
 
 ## 15. Side Effect Management (OpenViking Download-Run-Upload)
 
@@ -1366,7 +1327,7 @@ CC exits → diff detects new file → upload to OpenViking
   → next CC worker will discover this skill natively
 ```
 
-### 15.7 Settings Configuration (unchanged from earlier)
+### 15.7 Settings Configuration
 
 The `settings.json` in OpenViking is pre-configured per workspace:
 
@@ -1386,7 +1347,7 @@ The `settings.json` in OpenViking is pre-configured per workspace:
 - `CLAUDE_CODE_DISABLE_AUTO_MEMORY=0`: Auto-memory **enabled** — CC natively manages MEMORY.md
 - `bypassPermissions`: Set via CLI flag `--permission-mode bypassPermissions` (cannot be set in settings.json)
 
-### 15.7 Worker Lifecycle
+### 15.8 Worker Lifecycle
 
 ```go
 func (b *CCBroker) spawnWorker(ctx context.Context, sessionID, workspaceID string) (*CCWorker, error) {
@@ -1470,7 +1431,7 @@ Key design choices:
 - **No `--bare`** — not needed; downloaded files provide full `.claude/` structure; native features work
 - **Snapshot + diff + upload** — only modified files are uploaded, minimizing OpenViking API calls
 
-### 15.8 Subagent Context Consistency
+### 15.9 Subagent Context Consistency
 
 Subagents are same-process async generators (not separate OS processes). They share the same local temp directory:
 
@@ -1484,7 +1445,7 @@ CC Worker 进程（single process, single filesystem）
 
 No context inconsistency between subagents within a single turn. Cross-turn consistency is guaranteed by the download-upload cycle: the next worker downloads the latest state (including changes from the previous turn).
 
-### 15.9 Remaining Disabled Features
+### 15.10 Remaining Disabled Features
 
 | Feature | Reason | Mechanism |
 |---------|--------|-----------|
@@ -1876,18 +1837,18 @@ Comprehensive audit of all CC features against the stateless design:
 |---------|-------------|
 | WebSearch / WebFetch | Preserved via `--tools "WebSearch,WebFetch"`; no executor needed |
 | Skills | Downloaded to `.claude/skills/`; CC discovers natively; new skills created via `workspace_write` |
-| Auto-Memory | FUSE-mounted MEMORY.md; CC reads/writes natively |
-| CLAUDE.md | FUSE-mounted; full feature support (@include, frontmatter, rules) |
-| Context Compaction | Auto + reactive compaction functional; memory persists via FUSE |
+| Auto-Memory | Downloaded MEMORY.md; CC reads/writes natively on local filesystem; uploaded to OpenViking on exit |
+| CLAUDE.md | Downloaded from OpenViking; full feature support (@include, frontmatter, rules) |
+| Context Compaction | Auto + reactive compaction functional; memory persists via OpenViking upload |
 | Conversation Resume | Bridge SSE replays session history |
-| Multi-Model | Agent tool model override + ConfigTool via FUSE settings |
+| Multi-Model | Agent tool model override + ConfigTool; settings persist via OpenViking |
 | Streaming Output | Bridge SSE to frontend |
 | Cost/Token Tracking | CC reports via bridge; cc-broker extracts from SDK messages |
-| Config Tool | FUSE-mounted settings.json; changes persist via OpenViking |
-| Image/PDF Reading | MCP Read tool must support binary content + base64 encoding |
+| Config Tool | Downloaded settings.json; changes uploaded to OpenViking on exit |
+| Image/PDF Reading | MCP `remote_read` supports binary content + base64 encoding |
 | Concurrent Tool Execution | CC runs read-only tools in parallel; MCP server must be thread-safe |
-| System Prompt Customization | Agent definitions via FUSE; `--append-system-prompt` for workspace-level |
-| Permission System | `bypassPermissions` pre-configured in FUSE settings |
+| System Prompt Customization | Agent definitions downloaded from OpenViking; `--append-system-prompt` for workspace-level |
+| Permission System | `bypassPermissions` via CLI flags `--permission-mode bypassPermissions --dangerously-skip-permissions` |
 
 ### 17.2 Working with Adaptation
 
@@ -1904,12 +1865,12 @@ Comprehensive audit of all CC features against the stateless design:
 
 | Feature | Reason | Impact |
 |---------|--------|--------|
-| LSP | Requires local file indexing; incompatible with FUSE read-only cwd | Code navigation unavailable; CC can still read/grep files via MCP |
-| Worktrees (built-in) | No local git repo; `EnterWorktree` tool not exposed | Remote worktree via `Bash` + `git worktree` on executor (Section 16.3) |
+| LSP | Requires local file indexing; read-only cwd has no project source | Code navigation unavailable; CC can still read/grep files via `remote_read`/`remote_grep` |
+| Worktrees (built-in) | No local git repo; `EnterWorktree` tool not exposed | Remote worktree via `remote_bash` + `git worktree` on executor (Section 16.3) |
 | CronCreate (built-in) | Worker exits per turn; built-in cronScheduler can't run | Replaced by `create_scheduled_task` MCP tool → agentserver scheduler (Section 16.4) |
 | ScheduleWakeup (built-in) | Worker exits per turn | Replaced by `create_scheduled_task` with one-shot cron (Section 16.4) |
 | File Attribution | No local files to track | Tool calls execute on remote executors |
-| Telemetry | Prevent infrastructure leak | `CLAUDE_CODE_DISABLE_ANALYTICS=1` |
+| Telemetry | No env var to disable in current CC version | Accepted risk (consistent with Section 15.9) |
 | Session Transcript | Bridge event log is source of truth | `--no-session-persistence` |
 | RemoteTrigger | Requires OAuth to claude.ai | Not applicable for managed agents |
 | Keychain/OAuth | Managed environment | `ANTHROPIC_API_KEY` env var |
