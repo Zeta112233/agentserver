@@ -43,23 +43,33 @@ claude --sdk-url http://cc-broker:8080/v1/sessions/{session_id} \
 用户(微信/Web/API)
   │
   ▼
-imbridge ──► agentserver ──► cc-broker ──► sandboxproxy
-             (用户业务)  HTTP (推理编排) HTTP (连接/执行)
-                │               │           │    │
-                │               │        tunnel  HTTP
-                │               │           │    │
-                │               │           ▼    ▼
-                │               │       Local   Sandbox
-                │               │       Agent   (K8s/Docker)
-                │               │         │
-                │               │         │ 注册/心跳
-                │               │         ▼
-                │               │   executor-registry
-                │               │   (executor 生命周期)
+imbridge ──► agentserver ──► cc-broker ──────────► sandboxproxy
+             (用户业务)  HTTP (推理编排)     HTTP   (连接/执行)
+                │               │                    │    │
+                │               │                 tunnel  HTTP
+                │               │                    │    │
+                │               │                    ▼    ▼
+                │               │                Local   Sandbox
+                │               │                Agent   (K8s/Docker)
+                │               │                  │
+                │               │                  │ 注册/心跳
+                │               │                  ▼
+                │               │            executor-registry
+                │               │            (executor 生命周期)
                 │               │
-                │               ├──► OpenViking
-                │               │    (FUSE context mount)
-                │               │    CLAUDE.md / Memory / Skills / Settings
+                │          ┌────┴────┐
+                │          │         │
+                │     FUSE client  Tool Router
+                │     (内嵌)       MCP Server
+                │          │
+                │          │ HTTP
+                │          ▼
+                │      OpenViking
+                │   (context 持久化)
+                │          │
+                │          ▼
+                │    Storage Backend
+                │    (S3 / KV / SQLite)
                 │
             PostgreSQL
          (共享 event log)
@@ -70,9 +80,10 @@ imbridge ──► agentserver ──► cc-broker ──► sandboxproxy
 | Service | Responsibilities | Does NOT handle |
 |---------|-----------------|-----------------|
 | **agentserver** | User auth, workspace/session CRUD, IM inbound routing, event log persistence, bridge SSE to frontend | CC execution, executor connectivity |
-| **cc-broker** | CC worker management, bridge API (context SSE + event persistence), Tool Router MCP Server, calling sandboxproxy for tool execution, OpenViking FUSE mount lifecycle | Tunnel management, business logic, executor lifecycle |
+| **cc-broker** | CC worker management, bridge API (context SSE + event persistence), Tool Router MCP Server, calling sandboxproxy for tool execution, FUSE client (embedded) for OpenViking mount/unmount | Tunnel management, business logic, executor lifecycle, context storage |
 | **sandboxproxy** | Tunnel management (WebSocket), sandbox HTTP connectivity, unified tool execution API | Business logic, CC reasoning, executor registration |
 | **executor-registry** | Executor registration (OAuth), heartbeat, capability storage, capability probe triggering | Tunnel management, tool execution |
+| **OpenViking** | Persistent context storage (CLAUDE.md, Memory, Settings, Skills); serves FUSE client requests via HTTP; pluggable storage backend (S3/KV/SQLite) | CC execution, business logic |
 | **imbridge** | IM platform long-polling (WeChat/Telegram/Matrix), message forwarding to agentserver, outbound replies | Session management, CC execution |
 
 ### 2.3 Inter-Service Communication
@@ -91,6 +102,9 @@ sandboxproxy ──► executor-registry (query executor info, validate tunnel t
 cc-broker ◄── agentserver (ProcessTurn via SSE)
 cc-broker ──► sandboxproxy (tool execution)
 cc-broker ──► executor-registry (query executors, write back capabilities)
+cc-broker ──► OpenViking (FUSE client HTTP: read/write context files)
+
+OpenViking ◄── cc-broker (FUSE client reads/writes)
 
 agentserver ──► cc-broker (ProcessTurn)
 agentserver ──► executor-registry (register sandbox, query executors)
@@ -1038,7 +1052,7 @@ The `agentserver-agent` binary simplifies significantly:
 | Tool routing | MCP Server with `--tools ""` | CC-native, zero intrusion, clean separation |
 | Executor selection | CC (LLM) decides | LLM understands executor capabilities, makes intelligent routing |
 | Capability discovery | CC-driven probing | Flexible, no agent binary updates needed |
-| Service split | 4 services | Clean separation of concerns, independent scaling |
+| Service split | 5 services | agentserver, cc-broker, sandboxproxy, executor-registry, OpenViking; clean separation, independent scaling |
 | Inter-service protocol | HTTP + SSE | Consistent with existing codebase, no new dependencies |
 | Worker management | Per-turn process spawning | CC exits after each turn; `--bare` minimizes cold start; no stale process state |
 | Turn serialization | Per-session lock | Prevents concurrent turn processing race conditions |
