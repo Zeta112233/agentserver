@@ -8,10 +8,12 @@ import (
 )
 
 type Config struct {
-	Port        string
-	DatabaseURL string
-	JWTSecret   []byte
-	LogLevel    slog.Level
+	Port                string
+	DatabaseURL         string
+	JWTSecret           []byte
+	LogLevel            slog.Level
+	ExecutorRegistryURL string
+	AgentserverURL      string
 }
 
 func LoadConfigFromEnv() (Config, error) {
@@ -28,6 +30,8 @@ func LoadConfigFromEnv() (Config, error) {
 		return cfg, fmt.Errorf("CCBROKER_JWT_SECRET is required (32+ chars)")
 	}
 	cfg.JWTSecret = []byte(secret)
+	cfg.ExecutorRegistryURL = envOr("CCBROKER_EXECUTOR_REGISTRY_URL", "http://localhost:8084")
+	cfg.AgentserverURL = envOr("CCBROKER_AGENTSERVER_URL", "http://localhost:8080")
 	if v := os.Getenv("CCBROKER_LOG_LEVEL"); v != "" {
 		switch strings.ToLower(v) {
 		case "debug":

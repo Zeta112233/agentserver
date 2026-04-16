@@ -2,7 +2,9 @@ package ccbroker
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 
@@ -55,6 +57,31 @@ func (s *Server) Routes() http.Handler {
 	})
 
 	return r
+}
+
+// CreateMCPServer creates a per-worker MCP server and returns (server, port, closer, error).
+// The caller should call closer() to stop the MCP server when done.
+func (s *Server) CreateMCPServer(sessionID, workspaceID, workspaceDir string) (*MCPServer, int, func(), error) {
+	router := NewToolRouter(ToolRouterConfig{
+		ExecutorRegistryURL: s.config.ExecutorRegistryURL,
+		AgentserverURL:      s.config.AgentserverURL,
+		WorkspaceDir:        workspaceDir,
+		SessionID:           sessionID,
+		WorkspaceID:         workspaceID,
+	}, s.logger)
+
+	mcpSrv := NewMCPServer(router, s.logger)
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return nil, 0, nil, fmt.Errorf("listen: %w", err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+
+	go http.Serve(listener, mcpSrv) //nolint:errcheck
+
+	closer := func() { listener.Close() }
+	return mcpSrv, port, closer, nil
 }
 
 // Helpers

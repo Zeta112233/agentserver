@@ -2,6 +2,7 @@ package ccbroker
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 )
 
@@ -61,10 +62,14 @@ type MCPToolResult struct {
 // MCPServer implements http.Handler and speaks JSON-RPC 2.0 / MCP.
 type MCPServer struct {
 	router *ToolRouter
+	logger *slog.Logger
 }
 
-func NewMCPServer(router *ToolRouter) *MCPServer {
-	return &MCPServer{router: router}
+func NewMCPServer(router *ToolRouter, logger *slog.Logger) *MCPServer {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &MCPServer{router: router, logger: logger}
 }
 
 func (s *MCPServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
