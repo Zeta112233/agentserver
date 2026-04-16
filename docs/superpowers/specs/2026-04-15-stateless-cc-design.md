@@ -24,14 +24,17 @@ Introduce a **stateless Claude Code** architecture:
 
 ### 1.3 Key Insights
 
-**Insight 1: Tool externalization via MCP.** Claude Code supports `--tools` to selectively enable built-in tools, combined with `--mcp-config` to load a custom MCP server. We use `--tools "WebSearch,WebFetch"` to preserve CC's native web capabilities (no executor needed), while all filesystem/execution tools (Bash, Read, Edit, etc.) are disabled and replaced by our custom Tool Router MCP Server that routes to remote executors.
+**Insight 1: Tool externalization via MCP.** Claude Code supports `--tools` to selectively enable built-in tools, combined with `--mcp-config` to load a custom MCP server. We use `--tools "WebSearch,WebFetch"` to preserve CC's native web capabilities (no executor needed), while all filesystem/execution tools (Bash, Read, Edit, etc.) are disabled and replaced by our custom Tool Router MCP Server that routes to remote executors. MCP tools use `remote_` prefix (e.g., `remote_bash`, `remote_read`) to avoid name collision with CC's internal deny rules — `--tools` deny rules filter by tool name, and allow rules cannot override deny rules.
 
 **Insight 2: Stateless execution via bridge mode.** Claude Code's `--sdk-url` flag connects CC to an external bridge server via SSE. In this mode, CC holds **zero state** — conversation history is loaded from the bridge server via SSE replay, and results are written back via HTTP POST. CC processes are fully disposable: if one dies, a new process reconnects to the same bridge session and resumes from where the last one left off. The epoch mechanism ensures consistency.
 
 ```bash
-claude --sdk-url http://cc-broker:8080/v1/sessions/{session_id} \
+claude --print \
+       --sdk-url http://cc-broker:8080/v1/sessions/{session_id} \
        --tools "WebSearch,WebFetch" \
        --mcp-config '{"mcpServers":{"tool-router":{"type":"http","url":"..."}}}' \
+       --permission-mode bypassPermissions \
+       --dangerously-skip-permissions \
        --no-session-persistence
 ```
 
@@ -357,12 +360,14 @@ CC Worker
   ▼
 Tool Router MCP Server (in cc-broker)
   │
-  ├─ list_executors         → query executor-registry
-  ├─ Bash(executor_id, ...) → POST sandboxproxy /api/execute
-  ├─ Edit(executor_id, ...) → POST sandboxproxy /api/execute
-  ├─ Read(executor_id, ...) → POST sandboxproxy /api/execute
+  ├─ list_executors                → query executor-registry
+  ├─ remote_bash(executor_id, ...) → POST sandboxproxy /api/execute
+  ├─ remote_edit(executor_id, ...) → POST sandboxproxy /api/execute
+  ├─ remote_read(executor_id, ...) → POST sandboxproxy /api/execute
   └─ ...
 ```
+
+Note: MCP tools use `remote_` prefix to avoid collision with CC's built-in tool deny rules. When `--tools "WebSearch,WebFetch"` disables built-in tools like Bash/Read/Edit, CC's deny rules also filter MCP tools with the same names. The `remote_` prefix ensures MCP tools are not caught by these deny rules.
 
 ### 5.2 MCP Tool Definitions
 
@@ -414,11 +419,11 @@ Example response:
 
 **Execution tools (each with `executor_id` parameter):**
 
-All standard CC tools are exposed with an additional `executor_id` parameter. Example (Bash):
+All standard CC tools are exposed with a `remote_` prefix and an additional `executor_id` parameter. The prefix avoids collision with CC's internal deny rules. Example:
 
 ```json
 {
-  "name": "Bash",
+  "name": "remote_bash",
   "description": "Execute a shell command on the specified executor.",
   "inputSchema": {
     "type": "object",
@@ -441,13 +446,13 @@ Full tool set exposed by the MCP server:
 | Tool | Key Parameters | Description |
 |------|---------------|-------------|
 | `list_executors` | `status_filter` | Discover workspace executors |
-| `Bash` | `executor_id`, `command`, `timeout` | Execute shell command |
-| `Read` | `executor_id`, `file_path`, `offset`, `limit` | Read file |
-| `Edit` | `executor_id`, `file_path`, `old_string`, `new_string` | Edit file |
-| `Write` | `executor_id`, `file_path`, `content` | Write file |
-| `Glob` | `executor_id`, `pattern`, `path` | File pattern search |
-| `Grep` | `executor_id`, `pattern`, `path`, `glob` | Content search |
-| `LS` | `executor_id`, `path` | List directory |
+| `remote_bash` | `executor_id`, `command`, `timeout` | Execute shell command |
+| `remote_read` | `executor_id`, `file_path`, `offset`, `limit` | Read file (supports images/PDFs, returns base64) |
+| `remote_edit` | `executor_id`, `file_path`, `old_string`, `new_string` | Edit file |
+| `remote_write` | `executor_id`, `file_path`, `content` | Write file |
+| `remote_glob` | `executor_id`, `pattern`, `path` | File pattern search |
+| `remote_grep` | `executor_id`, `pattern`, `path`, `glob` | Content search |
+| `remote_ls` | `executor_id`, `path` | List directory |
 | `create_scheduled_task` | `cron`, `prompt`, `recurring` | Create scheduled task on agentserver |
 | `list_scheduled_tasks` | | List workspace scheduled tasks |
 | `cancel_scheduled_task` | `task_id` | Cancel a scheduled task |
@@ -500,11 +505,11 @@ User: "帮我把 dev 机器上的代码部署到测试环境"
 CC Turn 1: list_executors
   ← [Dev Machine Agent (go, node, git), Test Sandbox (docker, k8s)]
 
-CC Turn 2: Read(executor_id="agt_dev", file_path="~/app/deploy.sh")
+CC Turn 2: remote_read(executor_id="agt_dev", file_path="~/app/deploy.sh")
   → Tool Router → sandboxproxy → tunnel → dev machine
   ← file content
 
-CC Turn 3: Bash(executor_id="sbx_test", command="bash deploy.sh")
+CC Turn 3: remote_bash(executor_id="sbx_test", command="bash deploy.sh")
   → Tool Router → sandboxproxy → HTTP → test sandbox pod
   ← deployment output
 
@@ -1015,19 +1020,19 @@ The `agentserver-agent` binary simplifies significantly:
      → Tool Router → executor-registry
      ← [Dev Machine Agent, GPU Sandbox]
 
-   Turn 2: Read(executor_id="agt_dev", file_path="~/projects/ml/train.py")
+   Turn 2: remote_read(executor_id="agt_dev", file_path="~/projects/ml/train.py")
      → Tool Router → sandboxproxy → tunnel → Dev Machine
      ← file content (train.py)
 
-   Turn 3: Read(executor_id="agt_dev", file_path="~/projects/ml/requirements.txt")
+   Turn 3: remote_read(executor_id="agt_dev", file_path="~/projects/ml/requirements.txt")
      → Tool Router → sandboxproxy → tunnel → Dev Machine
      ← file content (requirements.txt)
 
-   Turn 4: Bash(executor_id="sbx_gpu", command="pip install -r /tmp/requirements.txt")
+   Turn 4: remote_bash(executor_id="sbx_gpu", command="pip install -r /tmp/requirements.txt")
      → Tool Router → sandboxproxy → HTTP → GPU Sandbox
      ← pip install output
 
-   Turn 5: Bash(executor_id="sbx_gpu", command="python /tmp/train.py --epochs 10")
+   Turn 5: remote_bash(executor_id="sbx_gpu", command="python /tmp/train.py --epochs 10")
      → Tool Router → sandboxproxy → HTTP → GPU Sandbox
      ← training output (loss, accuracy, etc.)
 
@@ -1052,7 +1057,7 @@ The `agentserver-agent` binary simplifies significantly:
 | Statelessness | Externalize context + tools | CC process is disposable, any worker handles any session |
 | Context storage | Event Sourcing (PostgreSQL) | Reuse existing `agent_session_events`, append-only, replayable |
 | Context loading | Bridge SSE replay | No JSONL materialization; CC natively loads history from bridge SSE endpoint |
-| Tool routing | MCP Server with `--tools "WebSearch,WebFetch"` | Preserve CC's native web tools; all executor-bound tools via MCP |
+| Tool routing | MCP Server (`remote_` prefix) + `--tools "WebSearch,WebFetch"` | Preserve CC's native web tools; executor-bound tools via MCP with `remote_` prefix to avoid deny rule collision |
 | Executor selection | CC (LLM) decides | LLM understands executor capabilities, makes intelligent routing |
 | Capability discovery | CC-driven probing | Flexible, no agent binary updates needed |
 | Service split | 5 services | agentserver, cc-broker, sandboxproxy, executor-registry, OpenViking; clean separation, independent scaling |
@@ -1106,19 +1111,25 @@ See Section 8.4 for full schema.
 
 ## 14. Migration Path
 
-1. **Phase 1**: Schema migrations (sandbox_id nullable, external_id, executor tables)
-2. **Phase 2**: Build executor-registry + sandboxproxy as standalone services
-3. **Phase 3**: Build cc-broker with bridge API, Tool Router MCP Server, and worker management
-4. **Phase 4**: Add IM inbound endpoint to agentserver, rewire imbridge
-5. **Phase 5**: Modify agentserver-agent to register with executor-registry and connect tunnel to sandboxproxy
-6. **Phase 6**: Validate `--tools ""` + MCP tool naming experimentally, adjust if needed
-7. **Phase 7**: Deprecate per-agent CC instances, route all reasoning through cc-broker
+1. **Phase 0**: OpenViking FUSE development — implement write persistence, scoped URI mounting, concurrent access support
+2. **Phase 1**: Schema migrations (sandbox_id nullable, external_id, executor tables, scheduled_tasks)
+3. **Phase 2**: Build executor-registry + sandboxproxy as standalone services
+4. **Phase 3**: Build cc-broker with bridge API, Tool Router MCP Server (with `remote_` prefixed tools), and worker management
+5. **Phase 4**: Add IM inbound endpoint to agentserver, rewire imbridge, add scheduled task service
+6. **Phase 5**: Modify agentserver-agent to register with executor-registry and connect tunnel to sandboxproxy
+7. **Phase 6**: Integration testing — validate CC with `--sdk-url` + `--tools "WebSearch,WebFetch"` + MCP + FUSE end-to-end
+8. **Phase 7**: Deprecate per-agent CC instances, route all reasoning through cc-broker
 
 ## 15. Side Effect Management (via OpenViking FUSE)
 
 CC produces side effects beyond conversation messages and tool calls: CLAUDE.md discovery, auto-memory read/write, settings, skills, plans, session transcripts, etc. In the stateless design, CC workers have no persistent local filesystem.
 
-**Solution**: Use [OpenViking](https://github.com/nicholasgasior/openviking) as the context layer. OpenViking provides a FUSE filesystem that maps `viking://` URIs to pluggable storage backends (S3, KV, SQLite). By FUSE-mounting OpenViking at CC's `$HOME/.claude/` and `cwd`, CC reads and writes files normally while OpenViking transparently persists them to shared storage.
+**Solution**: Use [OpenViking](/root/OpenViking) as the context layer. OpenViking provides a FUSE filesystem that maps `viking://` URIs to pluggable storage backends (S3, KV, SQLite). By FUSE-mounting OpenViking at CC's config directory and `cwd`, CC reads and writes files normally while OpenViking transparently persists them to shared storage.
+
+**Prerequisite**: OpenViking's current FUSE implementation is a prototype — the `release()` method does not persist writes back to the storage backend. Before this design can be implemented, OpenViking FUSE needs the following development:
+1. **Write persistence**: `release()` must write modified file contents back to OpenViking service via HTTP
+2. **Scoped URI mounting**: Support mounting arbitrary `viking://workspace/{wid}/...` URI scopes, not just predefined `MountScope` enum values
+3. **Concurrent access**: Validate that multiple FUSE mount processes accessing the same workspace data don't corrupt state
 
 ### 15.1 Architecture
 
@@ -1172,10 +1183,10 @@ Storage Backend (S3 / KV / SQLite)
 | Skills | **Native discovery** | Mounted at `{cwd}/.claude/skills/`; CC discovers and loads natively |
 | Plans | **Native read/write** | CC writes to `$HOME/.claude/plans/`; FUSE persists to OpenViking |
 | Session transcript | **Disable** | `--no-session-persistence`; bridge event log is source of truth |
-| Cron/Scheduled tasks | **Disable** | Incompatible with stateless; not meaningful in per-turn workers |
+| Cron/Scheduled tasks (built-in) | **Replace** | MCP `create_scheduled_task` → agentserver scheduler (Section 16.4) |
 | Worktrees | **Disable** | No local git repo; not exposed in MCP tool set |
 | Git internal ops | **Graceful fail** | No repo in cwd; all git goes through tool calls to executors |
-| Telemetry | **Disable** | `CLAUDE_CODE_DISABLE_ANALYTICS=1` |
+| Telemetry | **Accept** | No env var to disable; CC may send telemetry to Anthropic (accepted risk for managed environment) |
 | File attribution | **Disable** | `CLAUDE_CODE_DISABLE_FILE_CHECKPOINTING=1` |
 | Keychain/OAuth | **Skip** | `ANTHROPIC_API_KEY` env var only |
 
@@ -1245,20 +1256,19 @@ The `settings.json` in OpenViking is pre-configured per workspace:
 ```json
 {
   "permissions": {
-    "allow": ["mcp__tool-router__*"],
-    "mode": "bypassPermissions"
+    "allow": ["mcp__tool-router__*"]
   },
   "env": {
-    "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "165000",
     "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "0"
   }
 }
 ```
 
 Key settings:
-- `bypassPermissions`: No interactive permission dialogs
-- `CLAUDE_CODE_AUTO_COMPACT_WINDOW=165000`: Auto-compaction threshold (from nanoclaw's production config)
+- `permissions.allow`: Whitelist MCP tools (supplementary to `--permission-mode bypassPermissions` CLI flag)
+- `CLAUDE_CODE_AUTO_COMPACT_WINDOW=165000`: Set via env var at worker spawn (from nanoclaw's production config)
 - `CLAUDE_CODE_DISABLE_AUTO_MEMORY=0`: Auto-memory **enabled** — CC natively manages MEMORY.md
+- `bypassPermissions`: Set via CLI flag `--permission-mode bypassPermissions` (cannot be set in settings.json)
 
 ### 15.7 Worker FUSE Mount Lifecycle
 
@@ -1266,9 +1276,8 @@ Key settings:
 func (b *CCBroker) spawnWorker(ctx context.Context, sessionID, workspaceID string) (*CCWorker, error) {
     // 1. Create ephemeral mount points
     mountBase, _ := os.MkdirTemp("", "cc-worker-")
-    homeDir := filepath.Join(mountBase, "home")
+    claudeDir := filepath.Join(mountBase, "claude-config")
     projectDir := filepath.Join(mountBase, "project")
-    claudeDir := filepath.Join(homeDir, ".claude")
     os.MkdirAll(claudeDir, 0755)
     os.MkdirAll(projectDir, 0755)
 
@@ -1284,29 +1293,44 @@ func (b *CCBroker) spawnWorker(ctx context.Context, sessionID, workspaceID strin
         ReadOnly:   true,   // project instructions are read-only for CC
     })
 
-    // 3. Spawn CC worker
+    // 3. Deterministic auto-memory path (must be consistent across workers)
+    //    Without this, CC computes path from cwd which varies per worker.
+    autoMemPath := filepath.Join(claudeDir, "projects", 
+        fmt.Sprintf("ws_%s", workspaceID), "memory")
+    os.MkdirAll(autoMemPath, 0755)
+
+    // 4. Spawn CC worker
     bridgeURL := fmt.Sprintf("http://localhost:%d/v1/sessions/%s", b.bridgePort, sessionID)
     mcpConfigPath := b.writeMCPConfig(sessionID, workspaceID)
 
     cmd := exec.CommandContext(ctx, "claude",
+        "--print",                                  // required for --sdk-url
         "--sdk-url", bridgeURL,
         "--tools", "WebSearch,WebFetch",
         "--mcp-config", mcpConfigPath,
+        "--permission-mode", "bypassPermissions",   // no interactive permission dialogs
+        "--dangerously-skip-permissions",            // confirm bypass
         "--no-session-persistence",
     )
     cmd.Dir = projectDir
     cmd.Env = []string{
-        "HOME=" + homeDir,
+        // Config directory: use CLAUDE_CONFIG_DIR (more precise than HOME override)
+        "CLAUDE_CONFIG_DIR=" + claudeDir,
+        // Auto-memory path: deterministic across workers for same workspace
+        "CLAUDE_COWORK_MEMORY_PATH_OVERRIDE=" + autoMemPath,
+        // API key
         "ANTHROPIC_API_KEY=" + b.apiKey,
-        "CLAUDE_CODE_DISABLE_ANALYTICS=1",
+        // Feature controls
         "CLAUDE_CODE_DISABLE_FILE_CHECKPOINTING=1",
         "CLAUDE_CODE_AUTO_COMPACT_WINDOW=165000",
+        // Standard env
+        "HOME=" + mountBase,   // fallback for non-CC programs
         "PATH=" + os.Getenv("PATH"),
         "TERM=xterm-256color",
     }
     cmd.Start()
 
-    // 4. Cleanup on exit: unmount FUSE, remove temp dirs
+    // 5. Cleanup on exit: unmount FUSE, remove temp dirs
     go func() {
         cmd.Wait()
         b.viking.Unmount(ctx, homeMountID)
@@ -1325,7 +1349,13 @@ func (b *CCBroker) spawnWorker(ctx context.Context, sessionID, workspaceID strin
 }
 ```
 
-Note: `--bare` flag is **no longer needed**. With OpenViking providing the full `.claude/` directory structure, CC's native features (skills, auto-memory, CLAUDE.md discovery) work correctly. Only features truly incompatible with stateless mode are disabled via env vars.
+Key changes from naive approach:
+- **`CLAUDE_CONFIG_DIR`** instead of `HOME` override — more precise, only affects CC's config directory resolution
+- **`CLAUDE_COWORK_MEMORY_PATH_OVERRIDE`** — ensures all workers for the same workspace use the same auto-memory path, regardless of cwd
+- **`--print`** — required for `--sdk-url` to work from CLI
+- **`--permission-mode bypassPermissions --dangerously-skip-permissions`** — CLI flags instead of settings.json (settings.json does not support `permissions.mode`)
+- **No `CLAUDE_CODE_DISABLE_ANALYTICS`** — this env var does not exist in CC; telemetry cannot be disabled via env var (accepted risk)
+- **No `--bare`** — not needed; OpenViking provides full `.claude/` structure; native features (skills, auto-memory, CLAUDE.md) work correctly
 
 ### 15.8 Features Preserved (vs. Previous Design)
 
@@ -1346,9 +1376,9 @@ These are disabled via env vars because they are **structurally incompatible** w
 |---------|--------|-----------|
 | Session transcript | Bridge event log is source of truth; local JSONL is redundant | `--no-session-persistence` |
 | File attribution | No local files to track; tool calls execute on remote executors | `CLAUDE_CODE_DISABLE_FILE_CHECKPOINTING=1` |
-| Telemetry | May leak infrastructure details | `CLAUDE_CODE_DISABLE_ANALYTICS=1` |
-| Cron/Scheduled tasks | Worker exits after each turn; meaningless | Not exposed in MCP tool set |
-| Worktrees | No local git repo | Not exposed in MCP tool set |
+| Telemetry | No env var to disable in current CC version | Accepted risk; CC may send telemetry to Anthropic |
+| Cron (built-in) | Worker exits per turn; built-in cronScheduler non-functional | Replaced by `create_scheduled_task` MCP tool (Section 16.4) |
+| Worktrees (built-in) | No local git repo | Remote worktree via `remote_bash` + `git worktree` on executor (Section 16.3) |
 | Keychain/OAuth | Managed environment; API key via env var | `ANTHROPIC_API_KEY` env var |
 
 ## 16. User Interaction in Headless Mode
@@ -1461,20 +1491,20 @@ CC's built-in `EnterWorktree` tool creates local git worktrees, which doesn't wo
 CC main agent: "帮我同时重构前端和后端"
   │
   ├─ Subagent A (background): "重构前端"
-  │   Bash(executor="agt_dev", "git worktree add /tmp/wt-frontend -b refactor-frontend")
-  │   Read(executor="agt_dev", file_path="/tmp/wt-frontend/src/App.tsx")
-  │   Edit(executor="agt_dev", file_path="/tmp/wt-frontend/src/App.tsx", ...)
-  │   Bash(executor="agt_dev", "cd /tmp/wt-frontend && npm test")
+  │   remote_bash(executor="agt_dev", "git worktree add /tmp/wt-frontend -b refactor-frontend")
+  │   remote_read(executor="agt_dev", file_path="/tmp/wt-frontend/src/App.tsx")
+  │   remote_edit(executor="agt_dev", file_path="/tmp/wt-frontend/src/App.tsx", ...)
+  │   remote_bash(executor="agt_dev", "cd /tmp/wt-frontend && npm test")
   │
   ├─ Subagent B (background): "重构后端"
-  │   Bash(executor="agt_dev", "git worktree add /tmp/wt-backend -b refactor-backend")
-  │   Read(executor="agt_dev", file_path="/tmp/wt-backend/cmd/server.go")
-  │   Edit(executor="agt_dev", file_path="/tmp/wt-backend/cmd/server.go", ...)
-  │   Bash(executor="agt_dev", "cd /tmp/wt-backend && go test ./...")
+  │   remote_bash(executor="agt_dev", "git worktree add /tmp/wt-backend -b refactor-backend")
+  │   remote_read(executor="agt_dev", file_path="/tmp/wt-backend/cmd/server.go")
+  │   remote_edit(executor="agt_dev", file_path="/tmp/wt-backend/cmd/server.go", ...)
+  │   remote_bash(executor="agt_dev", "cd /tmp/wt-backend && go test ./...")
   │
   └─ Both complete → main agent merges:
-     Bash(executor="agt_dev", "cd ~/repo && git merge refactor-frontend && git merge refactor-backend")
-     Bash(executor="agt_dev", "git worktree remove /tmp/wt-frontend && git worktree remove /tmp/wt-backend")
+     remote_bash(executor="agt_dev", "cd ~/repo && git merge refactor-frontend && git merge refactor-backend")
+     remote_bash(executor="agt_dev", "git worktree remove /tmp/wt-frontend && git worktree remove /tmp/wt-backend")
 ```
 
 This is **more powerful** than CC's built-in worktree isolation because:
@@ -1642,9 +1672,11 @@ Comprehensive audit of all CC features against the stateless design:
 
 ## 18. Known Risks and Mitigations
 
-### 18.1 MCP Tool Naming Collision (Must Validate)
+### 18.1 MCP Tool Naming Collision (Resolved)
 
-When `--tools "WebSearch,WebFetch"` disables most built-in tools and the MCP server provides tools with the same names as disabled built-ins (Bash, Read, Edit, etc.), CC's internal permission system may still apply deny rules to these names. **This must be validated experimentally before implementation.** If naming conflicts occur, MCP tools should be renamed (e.g., `remote_bash`, `remote_read`) and the Tool Router adjusted accordingly.
+When `--tools "WebSearch,WebFetch"` disables most built-in tools, CC generates deny rules for the disabled tools. These deny rules also filter MCP tools matched by name. Additionally, allow rules in settings.json **cannot override** deny rules (deny is checked first in the permission evaluation order).
+
+**Resolution**: All MCP tools use `remote_` prefix to avoid collision: `remote_bash`, `remote_read`, `remote_edit`, `remote_write`, `remote_glob`, `remote_grep`, `remote_ls`. This ensures they are not caught by CC's deny rules for built-in tools.
 
 ### 18.2 Token Security
 
@@ -1658,7 +1690,14 @@ Tool calls like model training may run for extended periods. The sandboxproxy `/
 - The Tool Router MCP Server exposes a corresponding `poll_task(executor_id, task_id)` tool for CC to check progress
 - This is a Phase 2 enhancement; Phase 1 uses synchronous execution with a generous default timeout (10 minutes)
 
-### 18.4 Executor List Injection
+### 18.4 SSE Replay Limit
+
+The existing bridge implementation has `sseReplayLimit = 1000` events. Sessions with more than 1000 events before compaction will lose early events on replay. Mitigations:
+- `CLAUDE_CODE_AUTO_COMPACT_WINDOW=165000` triggers compaction before sessions grow too large
+- cc-broker's bridge implementation should increase the replay limit or implement pagination
+- Compaction reduces event count by summarizing old messages
+
+### 18.5 Executor List Injection
 
 The `list_executors` tool call costs a turn. As an optimization, the executor list can be injected into the CC system prompt via `--append-system-prompt` so CC always has current executor info without an explicit tool call. This can be implemented in cc-broker when constructing the CC worker startup command.
 
