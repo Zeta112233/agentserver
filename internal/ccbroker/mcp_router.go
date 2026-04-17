@@ -3,6 +3,7 @@ package ccbroker
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -19,9 +20,13 @@ import (
 type ToolRouter struct {
 	executorRegistryURL string
 	agentserverURL      string
+	imbridgeURL         string
+	imbridgeSecret      string
 	workspaceDir        string // set per-worker, local temp dir
 	sessionID           string
 	workspaceID         string
+	imChannelID         string
+	imUserID            string
 	httpClient          *http.Client
 	logger              *slog.Logger
 }
@@ -30,9 +35,13 @@ type ToolRouter struct {
 type ToolRouterConfig struct {
 	ExecutorRegistryURL string
 	AgentserverURL      string
+	IMBridgeURL         string
+	IMBridgeSecret      string
 	WorkspaceDir        string
 	SessionID           string
 	WorkspaceID         string
+	IMChannelID         string
+	IMUserID            string
 }
 
 // NewToolRouter creates a ToolRouter with the given configuration.
@@ -43,9 +52,13 @@ func NewToolRouter(cfg ToolRouterConfig, logger *slog.Logger) *ToolRouter {
 	return &ToolRouter{
 		executorRegistryURL: cfg.ExecutorRegistryURL,
 		agentserverURL:      cfg.AgentserverURL,
+		imbridgeURL:         cfg.IMBridgeURL,
+		imbridgeSecret:      cfg.IMBridgeSecret,
 		workspaceDir:        cfg.WorkspaceDir,
 		sessionID:           cfg.SessionID,
 		workspaceID:         cfg.WorkspaceID,
+		imChannelID:         cfg.IMChannelID,
+		imUserID:            cfg.IMUserID,
 		httpClient: &http.Client{
 			Timeout: 120 * time.Second,
 		},
@@ -204,10 +217,165 @@ func (r *ToolRouter) routeListExecutors(ctx context.Context, args map[string]int
 	return textResult(string(body)), nil
 }
 
-// routeToIM handles IM-related tools (send_message, send_image, send_file).
-// This is a placeholder until the IM integration is connected.
+// routeToIM handles send_message / send_image / send_file by forwarding to
+// imbridge's internal send endpoints. Requires per-turn IM context
+// (imChannelID + imUserID) populated by agentserver on the POST /api/turns
+// request when the turn was originated by an IM inbound.
 func (r *ToolRouter) routeToIM(ctx context.Context, toolName string, args map[string]interface{}) (*MCPToolResult, error) {
-	return textResult("IM tool " + toolName + " is not yet connected to agentserver"), nil
+	if r.imbridgeURL == "" {
+		return textError("IM tools are not configured (CCBROKER_IMBRIDGE_URL unset)"), nil
+	}
+	if r.imChannelID == "" || r.imUserID == "" {
+		return textError("IM tools require an IM-originated session"), nil
+	}
+
+	switch toolName {
+	case "send_message":
+		text, _ := args["text"].(string)
+		if text == "" {
+			return textError("text is required"), nil
+		}
+		return r.imbridgePost(ctx, "/api/internal/imbridge/send", map[string]string{
+			"channel_id": r.imChannelID,
+			"to_user_id": r.imUserID,
+			"text":       text,
+		})
+	case "send_image":
+		source, _ := args["source"].(string)
+		if source == "" {
+			return textError("source is required"), nil
+		}
+		data, err := r.resolveMediaSource(ctx, source)
+		if err != nil {
+			return textError("failed to resolve image source: " + err.Error()), nil
+		}
+		body := map[string]string{
+			"channel_id":   r.imChannelID,
+			"to_user_id":   r.imUserID,
+			"image_base64": base64.StdEncoding.EncodeToString(data),
+		}
+		if format, _ := args["format"].(string); format != "" {
+			body["format"] = format
+		}
+		if caption, _ := args["caption"].(string); caption != "" {
+			body["caption"] = caption
+		}
+		return r.imbridgePost(ctx, "/api/internal/imbridge/send-image", body)
+	case "send_file":
+		return textError("send_file is not yet supported by the IM provider"), nil
+	}
+	return textError("unknown IM tool: " + toolName), nil
+}
+
+// imbridgePost posts a JSON body to an imbridge internal endpoint.
+func (r *ToolRouter) imbridgePost(ctx context.Context, path string, body map[string]string) (*MCPToolResult, error) {
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("marshal imbridge request: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, r.imbridgeURL+path, bytes.NewReader(buf))
+	if err != nil {
+		return nil, fmt.Errorf("build imbridge request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if r.imbridgeSecret != "" {
+		req.Header.Set("X-Internal-Secret", r.imbridgeSecret)
+	}
+	resp, err := r.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("imbridge request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return textError(fmt.Sprintf("imbridge %s returned %d: %s", path, resp.StatusCode, respBody)), nil
+	}
+	return textResult("sent"), nil
+}
+
+// resolveMediaSource decodes an image/file source into raw bytes. Supports:
+//   - `executor_id:/absolute/path` — Read the file via executor-registry
+//   - `http://…` or `https://…` — fetch over HTTP
+//   - anything else — treat as base64-encoded bytes
+func (r *ToolRouter) resolveMediaSource(ctx context.Context, source string) ([]byte, error) {
+	if strings.HasPrefix(source, "http://") || strings.HasPrefix(source, "https://") {
+		return r.fetchURL(ctx, source)
+	}
+	if idx := strings.Index(source, ":"); idx > 0 && idx < len(source)-1 {
+		candidate := source[:idx]
+		rest := source[idx+1:]
+		if strings.HasPrefix(candidate, "exe_") && strings.HasPrefix(rest, "/") {
+			return r.readFromExecutor(ctx, candidate, rest)
+		}
+	}
+	return base64.StdEncoding.DecodeString(source)
+}
+
+// fetchURL GETs a URL and returns the body bytes. Caps the response at 20 MiB.
+func (r *ToolRouter) fetchURL(ctx context.Context, url string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := r.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("GET %s returned %d", url, resp.StatusCode)
+	}
+	return io.ReadAll(io.LimitReader(resp.Body, 20<<20))
+}
+
+// readFromExecutor executes a Read tool call on the executor and decodes the
+// base64-encoded bytes returned by the executor's Read handler.
+func (r *ToolRouter) readFromExecutor(ctx context.Context, executorID, filePath string) ([]byte, error) {
+	if r.executorRegistryURL == "" {
+		return nil, fmt.Errorf("executor-registry not configured")
+	}
+	reqBody := map[string]interface{}{
+		"executor_id": executorID,
+		"tool":        "Read",
+		"arguments": map[string]interface{}{
+			"file_path": filePath,
+			"binary":    true,
+		},
+	}
+	buf, _ := json.Marshal(reqBody)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		r.executorRegistryURL+"/api/execute", bytes.NewReader(buf))
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	resp, err := r.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("executor-registry returned %d: %s", resp.StatusCode, body)
+	}
+	var out struct {
+		Output   string `json:"output"`
+		ExitCode int    `json:"exit_code"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("decode executor response: %w", err)
+	}
+	if out.ExitCode != 0 {
+		return nil, fmt.Errorf("executor Read failed: %s", out.Output)
+	}
+	// For binary reads the executor currently returns the raw file bytes as
+	// Output. Attempt a base64 decode first (forward-compat with a future
+	// binary-safe Read); if that fails, fall back to the raw string bytes.
+	if decoded, err := base64.StdEncoding.DecodeString(out.Output); err == nil && len(decoded) > 0 {
+		return decoded, nil
+	}
+	return []byte(out.Output), nil
 }
 
 // routeToScheduler handles scheduling-related tools (*_scheduled_*).
