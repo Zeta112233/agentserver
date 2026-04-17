@@ -15,22 +15,25 @@ import (
 
 	"nhooyr.io/websocket"
 
+	"github.com/agentserver/agentserver/internal/agent/executortools"
 	"github.com/agentserver/agentserver/internal/tunnel"
 )
 
 // ExecutorClient runs a tunnel to executor-registry and serves tool
 // execution requests from cc-broker workers.
 type ExecutorClient struct {
-	session *ExecutorSession
-	workDir string
+	session  *ExecutorSession
+	workDir  string
+	executor *executortools.ToolExecutor
 }
 
 // NewExecutorClient constructs a new executor client bound to the given
 // registry session and working directory.
 func NewExecutorClient(sess *ExecutorSession, workDir string) *ExecutorClient {
 	return &ExecutorClient{
-		session: sess,
-		workDir: workDir,
+		session:  sess,
+		workDir:  workDir,
+		executor: executortools.New(workDir),
 	}
 }
 
@@ -124,14 +127,21 @@ func (c *ExecutorClient) handleStream(ctx context.Context, stream net.Conn) {
 		return
 	}
 
-	// Task 3 replaces this with real dispatch.
-	body, _ := io.ReadAll(req.Body)
-	log.Printf("received tool execution request (%d bytes); dispatcher not yet implemented", len(body))
-	resp, _ := json.Marshal(map[string]interface{}{
-		"output":    "tool executor not yet implemented",
-		"exit_code": 1,
-	})
-	writeHTTPResponse(stream, http.StatusOK, resp)
+	body, err := io.ReadAll(req.Body)
+	if err != nil {
+		writeHTTPResponse(stream, http.StatusBadRequest, []byte(`{"error":"read body"}`))
+		return
+	}
+
+	var execReq executortools.ExecuteRequest
+	if err := json.Unmarshal(body, &execReq); err != nil {
+		writeHTTPResponse(stream, http.StatusBadRequest, []byte(`{"error":"invalid body"}`))
+		return
+	}
+
+	resp := c.executor.Execute(ctx, execReq)
+	respBody, _ := json.Marshal(resp)
+	writeHTTPResponse(stream, http.StatusOK, respBody)
 }
 
 // heartbeatLoop sends a heartbeat every 20s (plus one immediately).
