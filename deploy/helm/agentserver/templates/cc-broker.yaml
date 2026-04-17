@@ -54,8 +54,9 @@ spec:
             - sh
             - -c
             - |
-              PGPASSWORD="$PG_PASSWORD" psql -h {{ .Release.Name }}-postgresql -U {{ .Values.postgresql.auth.username }} -d {{ .Values.postgresql.auth.database }} -tc "SELECT 1 FROM pg_database WHERE datname='{{ .Values.ccbroker.database.name }}'" | grep -q 1 || \
-              PGPASSWORD="$PG_PASSWORD" createdb -h {{ .Release.Name }}-postgresql -U {{ .Values.postgresql.auth.username }} {{ .Values.ccbroker.database.name }}
+              {{- $dbName := (dig "database" "name" "ccbroker" .Values.ccbroker) }}
+              PGPASSWORD="$PG_PASSWORD" psql -h {{ .Release.Name }}-postgresql -U {{ .Values.postgresql.auth.username }} -d {{ .Values.postgresql.auth.database }} -tc "SELECT 1 FROM pg_database WHERE datname='{{ $dbName }}'" | grep -q 1 || \
+              PGPASSWORD="$PG_PASSWORD" createdb -h {{ .Release.Name }}-postgresql -U {{ .Values.postgresql.auth.username }} {{ $dbName }}
           env:
             - name: PG_PASSWORD
               valueFrom:
@@ -89,9 +90,16 @@ spec:
               value: "http://{{ .Release.Name }}:{{ .Values.service.port }}"
             - name: CCBROKER_IMBRIDGE_URL
               value: "http://{{ .Release.Name }}-imbridge:{{ .Values.imbridge.port }}"
-            {{- if .Values.ccbroker.openviking.url }}
+            {{/* Prefer the explicit ccbroker.openviking.url; otherwise, if
+                 the OpenViking subchart is enabled in this release, point at
+                 its in-cluster service DNS. */}}
+            {{- $ovURL := .Values.ccbroker.openviking.url }}
+            {{- if and (not $ovURL) .Values.openviking.enabled }}
+            {{- $ovURL = printf "http://%s-openviking:%v" .Release.Name (int .Values.openviking.service.port) }}
+            {{- end }}
+            {{- if $ovURL }}
             - name: CCBROKER_OPENVIKING_URL
-              value: {{ .Values.ccbroker.openviking.url | quote }}
+              value: {{ $ovURL | quote }}
             {{- end }}
             {{- if .Values.ccbroker.openviking.apiKey }}
             - name: CCBROKER_OPENVIKING_API_KEY
