@@ -178,3 +178,11 @@ func TestUnknownTool(t *testing.T) {
 		t.Fatalf("unexpected error: %s", resp.Output)
 	}
 }
+
+func TestGrepMissingPath(t *testing.T) {
+	e := New(t.TempDir())
+	resp := run(t, e, "Grep", `{"pattern":"x","path":"does-not-exist"}`)
+	if resp.ExitCode == 0 {
+		t.Fatalf("expected error when grepping missing path, got success: %s", resp.Output)
+	}
+}

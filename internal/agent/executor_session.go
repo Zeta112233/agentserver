@@ -76,6 +76,20 @@ func loadLatestExecutorSession(serverURL, workspaceID string) (*ExecutorSession,
 	return sessions[0], nil
 }
 
+// removeExecutorSession deletes the persisted session file for the given
+// executor ID. Missing files are not considered an error.
+func removeExecutorSession(executorID string) error {
+	dir, err := executorSessionsDir()
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(dir, executorID+".json")
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
 // saveExecutorSession writes the session JSON to disk.
 func saveExecutorSession(sess *ExecutorSession) error {
 	dir, err := executorSessionsDir()
@@ -137,13 +151,18 @@ func registerExecutorWithRegistry(serverURL, name, workspaceID string) (*Executo
 
 // LoadOrRegisterExecutor reuses a saved session for the given serverURL +
 // workspaceID if one exists, otherwise registers a new executor with the
-// registry and persists the result.
+// registry and persists the result. Read errors other than "sessions dir
+// doesn't exist" are surfaced to the caller rather than silently triggering
+// a re-registration.
 func LoadOrRegisterExecutor(opts ExecutorOpts) (*ExecutorSession, error) {
 	if opts.WorkspaceID == "" {
 		return nil, fmt.Errorf("workspace_id is required")
 	}
 	sess, err := loadLatestExecutorSession(opts.ServerURL, opts.WorkspaceID)
-	if err == nil && sess != nil {
+	if err != nil {
+		return nil, fmt.Errorf("load saved session: %w", err)
+	}
+	if sess != nil {
 		return sess, nil
 	}
 	sess, err = registerExecutorWithRegistry(opts.ServerURL, opts.Name, opts.WorkspaceID)

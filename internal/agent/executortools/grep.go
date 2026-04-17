@@ -65,6 +65,9 @@ func rgGrep(ctx context.Context, pattern, glob, searchPath string) ExecuteRespon
 }
 
 func goGrep(pattern, glob, searchPath string) ExecuteResponse {
+	if _, err := os.Stat(searchPath); err != nil {
+		return errResponse("grep: " + err.Error())
+	}
 	re, err := regexp.Compile(pattern)
 	if err != nil {
 		return errResponse("invalid pattern: " + err.Error())
