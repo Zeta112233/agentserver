@@ -261,6 +261,7 @@ func (s *Server) handlePollTasks(w http.ResponseWriter, r *http.Request) {
 		MaxTurns      int     `json:"max_turns"`
 		MaxBudgetUSD  float64 `json:"max_budget_usd"`
 		SessionID     string  `json:"session_id,omitempty"`
+		RequesterID   string  `json:"requester_id,omitempty"`
 	}
 
 	result := make([]pollResponse, len(tasks))
@@ -274,6 +275,9 @@ func (s *Server) handlePollTasks(w http.ResponseWriter, r *http.Request) {
 		}
 		if t.SessionID.Valid {
 			result[i].SessionID = t.SessionID.String
+		}
+		if t.RequesterID.Valid {
+			result[i].RequesterID = t.RequesterID.String
 		}
 	}
 

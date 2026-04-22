@@ -110,7 +110,7 @@ func (b *Bridge) Tools() []ToolDef {
 				"type": "object",
 				"properties": map[string]any{
 					"task_id":        map[string]any{"type": "string", "description": "The task ID returned by delegate_task"},
-					"include_output": map[string]any{"type": "boolean", "description": "If true, include the full task output from session events (may be long). Default: false."},
+					"include_output": map[string]any{"type": "boolean", "description": "If true, include the full task output from session events. Default: true."},
 				},
 				"required": []string{"task_id"},
 			},
@@ -212,7 +212,7 @@ func (b *Bridge) handleDelegateTask(args json.RawMessage) (*ToolResult, error) {
 	}
 	json.Unmarshal(respBody, &result)
 
-	return textResult(fmt.Sprintf("Task delegated successfully.\n\nTask ID: %s\nSession ID: %s\nStatus: %s\n\nUse check_task with task_id to monitor progress.", result.TaskID, result.SessionID, result.Status)), nil
+	return textResult(fmt.Sprintf("Task delegated successfully.\n\nTask ID: %s\nStatus: %s\n\nUse check_task with this task_id to monitor progress.", result.TaskID, result.Status)), nil
 }
 
 func (b *Bridge) handleCheckTask(args json.RawMessage) (*ToolResult, error) {
@@ -224,10 +224,7 @@ func (b *Bridge) handleCheckTask(args json.RawMessage) (*ToolResult, error) {
 		return errorResult("Invalid arguments: " + err.Error()), nil
 	}
 
-	url := fmt.Sprintf("%s/api/agent/tasks/%s", b.config.ServerURL, params.TaskID)
-	if params.IncludeOutput {
-		url += "?include_output=true"
-	}
+	url := fmt.Sprintf("%s/api/agent/tasks/%s?include_output=true", b.config.ServerURL, params.TaskID)
 	body, err := b.apiGet(url)
 	if err != nil {
 		return errorResult(fmt.Sprintf("Failed to check task: %v", err)), nil
@@ -237,10 +234,30 @@ func (b *Bridge) handleCheckTask(args json.RawMessage) (*ToolResult, error) {
 	json.Unmarshal(body, &task)
 
 	status, _ := task["status"].(string)
+
+	// Task still in progress — tell upstream to wait, do NOT signal completion.
+	switch status {
+	case "pending", "assigned", "running":
+		return textResult(fmt.Sprintf(
+			"Task %s is still in progress (status: %s). Do NOT proceed yet — call check_task again later to poll for completion.",
+			params.TaskID, status,
+		)), nil
+	}
+
+	// Task finished — build summary.
 	summary := fmt.Sprintf("Task %s: %s", params.TaskID, status)
 
-	if result, ok := task["result"].(string); ok && result != "" {
-		summary += "\n\nResult:\n" + result
+	if resultRaw, exists := task["result"]; exists && resultRaw != nil {
+		switch v := resultRaw.(type) {
+		case string:
+			if v != "" {
+				summary += "\n\nResult:\n" + v
+			}
+		default:
+			if b, err := json.Marshal(v); err == nil && string(b) != "null" {
+				summary += "\n\nResult:\n" + string(b)
+			}
+		}
 	}
 	if reason, ok := task["failure_reason"].(string); ok && reason != "" {
 		summary += "\n\nFailure reason: " + reason
@@ -249,6 +266,10 @@ func (b *Bridge) handleCheckTask(args json.RawMessage) (*ToolResult, error) {
 		summary += "\n\nFull output:\n" + output
 	}
 
+	// Return error signal for failed/cancelled tasks so upstream knows to stop.
+	if status == "failed" || status == "cancelled" {
+		return errorResult(summary), nil
+	}
 	return textResult(summary), nil
 }
 

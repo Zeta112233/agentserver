@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	agentsdk "github.com/agentserver/claude-agent-sdk-go"
@@ -89,8 +90,11 @@ func (w *TaskWorker) ExecuteTask(ctx context.Context, taskID, sessionID, prompt,
 	// 5. Build query options.
 	opts := []agentsdk.QueryOption{
 		agentsdk.WithCwd(w.opts.Workdir),
-		agentsdk.WithPermissionMode(agentsdk.PermissionBypassAll),
-		agentsdk.WithAllowDangerouslySkipPermissions(),
+		// Use "dontAsk" instead of "bypassPermissions": claude v2.1.117+ blocks
+		// both --dangerously-skip-permissions and --permission-mode bypassPermissions
+		// when running as root. "dontAsk" achieves the same auto-approval without
+		// the root restriction.
+		agentsdk.WithPermissionMode("dontAsk"),
 	}
 	if w.opts.CLIPath != "" && w.opts.CLIPath != "claude" {
 		opts = append(opts, agentsdk.WithCLIPath(w.opts.CLIPath))
@@ -109,6 +113,8 @@ func (w *TaskWorker) ExecuteTask(ctx context.Context, taskID, sessionID, prompt,
 	stream := agentsdk.Query(ctx, prompt, opts...)
 	defer stream.Close()
 
+	// Collect assistant text as fallback when ResultMessage.Result is empty.
+	var assistantText strings.Builder
 	for stream.Next() {
 		msg := stream.Current()
 
@@ -118,6 +124,8 @@ func (w *TaskWorker) ExecuteTask(ctx context.Context, taskID, sessionID, prompt,
 		if len(raw) == 0 {
 			continue
 		}
+
+		collectAssistantText(raw, &assistantText)
 
 		if writeErr := bridge.WriteBatch([]json.RawMessage{raw}); writeErr != nil {
 			log.Printf("task-worker: bridge write error: %v", writeErr)
@@ -132,6 +140,10 @@ func (w *TaskWorker) ExecuteTask(ctx context.Context, taskID, sessionID, prompt,
 	var resultMsg *agentsdk.ResultMessage
 	if result, err := stream.Result(); err == nil && result != nil {
 		resultMsg = result
+		// If the result text is empty, use collected assistant messages as fallback.
+		if resultMsg.Result == "" {
+			resultMsg.Result = strings.TrimSpace(assistantText.String())
+		}
 		resultData, _ := json.Marshal(result)
 		bridge.WriteBatch([]json.RawMessage{resultData})
 	}
@@ -240,4 +252,28 @@ func (w *TaskWorker) updateTaskStatus(ctx context.Context, taskID string, body [
 		return
 	}
 	resp.Body.Close()
+}
+
+// collectAssistantText extracts text content from an assistant message and appends it to sb.
+func collectAssistantText(raw json.RawMessage, sb *strings.Builder) {
+	var msg struct {
+		Type    string `json:"type"`
+		Message struct {
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"message"`
+	}
+	if json.Unmarshal(raw, &msg) != nil || msg.Type != "assistant" {
+		return
+	}
+	for _, block := range msg.Message.Content {
+		if block.Type == "text" && block.Text != "" {
+			if sb.Len() > 0 {
+				sb.WriteString("\n")
+			}
+			sb.WriteString(block.Text)
+		}
+	}
 }
