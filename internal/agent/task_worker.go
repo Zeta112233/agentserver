@@ -90,11 +90,8 @@ func (w *TaskWorker) ExecuteTask(ctx context.Context, taskID, sessionID, prompt,
 	// 5. Build query options.
 	opts := []agentsdk.QueryOption{
 		agentsdk.WithCwd(w.opts.Workdir),
-		// Use "dontAsk" instead of "bypassPermissions": claude v2.1.117+ blocks
-		// both --dangerously-skip-permissions and --permission-mode bypassPermissions
-		// when running as root. "dontAsk" achieves the same auto-approval without
-		// the root restriction.
-		agentsdk.WithPermissionMode("dontAsk"),
+		agentsdk.WithPermissionMode(agentsdk.PermissionBypassAll),
+		agentsdk.WithAllowDangerouslySkipPermissions(),
 	}
 	if w.opts.CLIPath != "" && w.opts.CLIPath != "claude" {
 		opts = append(opts, agentsdk.WithCLIPath(w.opts.CLIPath))
